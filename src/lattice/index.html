@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lattice</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb; --surface-2: #f2f1ed; --border: #dedcd5;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7973;
+    --edge: #b9b7af; --edge-strong: #6d6c66; --unthemed: #9a9890;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --surface-2: #242422; --border: #3a3936;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+      --edge: #4a4945; --edge-strong: #a09f97; --unthemed: #6f6e68;
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--surface-1); color: var(--text-primary);
+         height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; padding: 10px 16px;
+           border-bottom: 1px solid var(--border); }
+  h1 { font-size: 16px; margin: 0; }
+  .counts { color: var(--text-secondary); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--text-secondary); font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .ln { width: 18px; height: 0; border-top: 2px solid var(--edge-strong); display: inline-block; }
+  input, button { font: inherit; color: var(--text-primary); background: var(--surface-2);
+                  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  button[aria-pressed="true"] { border-color: var(--text-secondary); }
+  main { display: grid; grid-template-columns: 1fr 380px; min-height: 0; }
+  #graph, #list { min-height: 0; overflow: hidden; }
+  #list { overflow: auto; padding: 8px 16px; display: none; }
+  #panel { border-left: 1px solid var(--border); overflow: auto; padding: 16px; }
+  #panel h2 { font-size: 15px; margin: 0 0 6px; }
+  #panel .statement { margin: 0 0 10px; }
+  #panel .meta, #panel .notes { color: var(--text-secondary); font-size: 13px; white-space: pre-wrap; }
+  #panel .ev { border-top: 1px solid var(--border); padding: 8px 0; }
+  #panel .ev q { display: block; }
+  #panel .ev .by { color: var(--text-muted); font-size: 12px; }
+  .hint { color: var(--text-muted); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  tr.row { cursor: pointer; } tr.row:hover { background: var(--surface-2); }
+  svg text { fill: var(--text-secondary); font-size: 11px; pointer-events: none; }
+  .tip { position: fixed; pointer-events: none; background: var(--surface-2); color: var(--text-primary);
+         border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; max-width: 320px;
+         display: none; }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 60vh auto; }
+    #panel { border-left: 0; border-top: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lattice</h1>
+  <span class="counts" id="counts"></span>
+  <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas">
+  <button id="view" aria-pressed="false">List view</button>
+  <div class="legend" id="legend"></div>
+</header>
+<main>
+  <div id="graph"></div>
+  <div id="list"></div>
+  <aside id="panel"><p class="hint">Click an idea to see its evidence. Outlined circles come from the archive;
+    filled ones were captured from conversations. Size grows with evidence.</p></aside>
+</main>
+<div class="tip" id="tip"></div>
+<script>
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const day = iso => iso ? new Date(iso).toLocaleDateString(undefined, {month: "short", day: "numeric"}) : "";
+
+// The server embeds the graph in the page (no second round trip); fall back to the API if it didn't.
+const embedded = /*GRAPH*/null;
+embedded ? draw(embedded) : fetch("/api/graph").then(r => r.json()).then(draw);
+
+function draw({nodes, links, themes}) {
+  // Themes take categorical slots in a fixed order (by name), so a theme keeps its color as the lattice grows.
+  const order = themes.map(t => t.name);
+  const slot = name => order.indexOf(name) >= 0 && order.indexOf(name) < 5 ? `var(--series-${order.indexOf(name) + 1})` : "var(--unthemed)";
+  const color = n => n.themes.length ? slot(n.themes[0]) : "var(--unthemed)";
+  const captured = nodes.filter(n => n.origin === "captured").length;
+  document.getElementById("counts").textContent =
+    `${nodes.length} ideas (${captured} captured, ${nodes.length - captured} from the archive) · ${links.length} connections`;
+  document.getElementById("legend").innerHTML =
+    order.slice(0, 5).map(name => `<span><i class="sw" style="background:${slot(name)}"></i>${esc(name)}</span>`).join("") +
+    `<span><i class="sw" style="background:var(--unthemed)"></i>No theme yet</span>` +
+    `<span><i class="ln"></i>evolves</span><span><i class="ln" style="border-top-style:dashed"></i>archive link</span>` +
+    `<span><i class="ln" style="border-top-width:1px;border-color:var(--edge)"></i>related</span>`;
+
+  const degree = Object.fromEntries(nodes.map(n => [n.id, 0]));
+  links.forEach(l => { degree[l.source]++; degree[l.target]++; });
+  const labelled = new Set([...nodes].sort((a, b) => degree[b.id] - degree[a.id]).slice(0, 12).map(n => n.id));
+  const radius = n => 5 + 3 * Math.sqrt(n.evidence);
+
+  const box = document.getElementById("graph");
+  const W = box.clientWidth, H = box.clientHeight;
+  const svg = d3.select(box).append("svg").attr("width", W).attr("height", H)
+    .attr("role", "img").attr("aria-label", "Network of ideas and their connections");
+  svg.append("defs").append("marker").attr("id", "arrow").attr("viewBox", "0 0 10 10").attr("refX", 16)
+    .attr("refY", 5).attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
+    .append("path").attr("d", "M0,0L10,5L0,10z").attr("fill", css("--edge-strong"));
+  const g = svg.append("g");
+  svg.call(d3.zoom().scaleExtent([0.3, 4]).on("zoom", e => g.attr("transform", e.transform)));
+
+  const edge = g.append("g").selectAll("line").data(links).join("line")
+    .attr("stroke", l => l.kind === "related" ? css("--edge") : css("--edge-strong"))
+    .attr("stroke-width", l => l.kind === "related" ? 1 : 2)
+    .attr("stroke-dasharray", l => l.kind === "archive" ? "4 3" : null)
+    .attr("marker-end", l => l.kind === "evolves" ? "url(#arrow)" : null);
+  const node = g.append("g").selectAll("circle").data(nodes).join("circle")
+    .attr("r", radius)
+    .style("fill", n => n.origin === "archive" ? "var(--surface-1)" : color(n))
+    .style("stroke", n => n.origin === "archive" ? color(n) : "var(--surface-1)")
+    .attr("stroke-width", n => n.origin === "archive" ? 2.5 : 2)
+    .style("cursor", "pointer")
+    .on("mousemove", (e, n) => { const t = document.getElementById("tip");
+      t.style.display = "block"; t.style.left = e.clientX + 12 + "px"; t.style.top = e.clientY + 12 + "px";
+      t.textContent = `${n.title}${n.evidence ? ` · ${n.evidence} piece${n.evidence > 1 ? "s" : ""} of evidence` : ""}`; })
+    .on("mouseleave", () => { document.getElementById("tip").style.display = "none"; })
+    .on("click", (e, n) => show(n.id))
+    .call(d3.drag()
+      .on("start", (e, n) => { if (!e.active) sim.alphaTarget(0.2).restart(); n.fx = n.x; n.fy = n.y; })
+      .on("drag", (e, n) => { n.fx = e.x; n.fy = e.y; })
+      .on("end", (e, n) => { if (!e.active) sim.alphaTarget(0); n.fx = null; n.fy = null; }));
+  const label = g.append("g").selectAll("text").data(nodes.filter(n => labelled.has(n.id))).join("text")
+    .text(n => n.title).attr("dx", 10).attr("dy", 4);
+
+  const sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(n => n.id).distance(l => l.kind === "related" ? 70 : 50).strength(0.6))
+    .force("charge", d3.forceManyBody().strength(-60))
+    .force("center", d3.forceCenter(W / 2, H / 2))
+    .force("x", d3.forceX(W / 2).strength(0.04)).force("y", d3.forceY(H / 2).strength(0.04))
+    .force("collide", d3.forceCollide(n => radius(n) + 2))
+    .stop();
+  const place = () => {
+    edge.attr("x1", l => l.source.x).attr("y1", l => l.source.y).attr("x2", l => l.target.x).attr("y2", l => l.target.y);
+    node.attr("cx", n => n.x).attr("cy", n => n.y);
+    label.attr("x", n => n.x).attr("y", n => n.y);
+  };
+  sim.tick(300);   // settle before the first paint, so the map doesn't jiggle into place
+  place();
+  sim.on("tick", place);   // dragging restarts it
+
+  document.getElementById("search").addEventListener("input", e => {
+    const q = e.target.value.trim().toLowerCase();
+    const hit = n => !q || (n.title + " " + n.statement).toLowerCase().includes(q);
+    node.attr("opacity", n => hit(n) ? 1 : 0.15);
+    renderList(nodes.filter(hit));
+  });
+
+  const list = document.getElementById("list");
+  function renderList(rows) {
+    list.innerHTML = `<table><thead><tr><th>Idea</th><th>From</th><th>Themes</th><th>Evidence</th><th>Last said</th></tr></thead><tbody>` +
+      [...rows].sort((a, b) => (b.last_said || "").localeCompare(a.last_said || "")).map(n =>
+        `<tr class="row" data-id="${n.id}"><td>${esc(n.title)}</td><td>${n.origin === "archive" ? esc(n.ref) : "captured"}</td>` +
+        `<td>${esc(n.themes.join(", "))}</td><td>${n.evidence}</td><td>${day(n.last_said)}</td></tr>`).join("") +
+      `</tbody></table>`;
+    list.querySelectorAll("tr.row").forEach(tr => tr.addEventListener("click", () => show(tr.dataset.id)));
+  }
+  renderList(nodes);
+  document.getElementById("view").addEventListener("click", e => {
+    const listing = e.target.getAttribute("aria-pressed") !== "true";
+    e.target.setAttribute("aria-pressed", listing);
+    e.target.textContent = listing ? "Map view" : "List view";
+    box.style.display = listing ? "none" : "block";
+    list.style.display = listing ? "block" : "none";
+  });
+}
+
+function show(id) {
+  fetch(`/api/idea/${id}`).then(r => r.json()).then(d => {
+    document.getElementById("panel").innerHTML =
+      `<h2>${esc(d.title)}</h2><p class="statement">${esc(d.statement)}</p>` +
+      `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : "Captured from conversation"}` +
+      `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
+      (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
+      d.evidence.map(ev => `<div class="ev"><q>${esc(ev.quote)}</q>` +
+        `<div class="by">${esc(ev.said_by)} · ${day(ev.said_at)} · ${esc(ev.kind)}` +
+        `${ev.verdict ? ` · ${ev.verdict === "keep" ? "kept" : "discarded"}` : ""}</div></div>`).join("");
+  });
+}
+</script>
+</body>
+</html>
