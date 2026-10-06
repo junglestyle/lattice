@@ -25,8 +25,10 @@ def graph(conn) -> dict:
              for i, t, s, o, ref, th, n, k, d, st, f, last in ideas]
     links = [{"source": str(a), "target": str(b), "kind": kind, "weight": w}
              for a, b, kind, w in conn.execute("SELECT a, b, kind, weight FROM pub.connections")]
-    themes = [{"id": str(i), "name": n, "pinned": p, "ideas": c}
-              for i, n, p, c in conn.execute("SELECT theme_id, name, pinned, n_ideas FROM pub.themes ORDER BY name")]
+    # Pinned first, then oldest first: a stable order, so a theme keeps its color as others come and go.
+    themes = [{"id": str(i), "name": n, "pinned": p, "proposed": o == "clustered", "ideas": c}
+              for i, n, p, o, c in conn.execute("""SELECT theme_id, name, pinned, origin, n_ideas FROM pub.themes
+                                                   ORDER BY pinned DESC, created_at, name""")]
     return {"nodes": nodes, "links": links, "themes": themes}
 
 

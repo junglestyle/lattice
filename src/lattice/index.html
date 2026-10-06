@@ -12,6 +12,7 @@
     --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7973;
     --edge: #b9b7af; --edge-strong: #6d6c66; --unthemed: #9a9890;
     --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
+    --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
@@ -20,6 +21,7 @@
       --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
       --edge: #4a4945; --edge-strong: #a09f97; --unthemed: #6f6e68;
       --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+      --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
     }
   }
   * { box-sizing: border-box; }
@@ -86,16 +88,20 @@ const embedded = /*GRAPH*/null;
 embedded ? draw(embedded) : fetch("/api/graph").then(r => r.json()).then(draw);
 
 function draw({nodes, links, themes}) {
-  // Themes take categorical slots in a fixed order (by name), so a theme keeps its color as the lattice grows.
+  // Themes take the 8 categorical slots in the server's stable order (pinned first, then oldest), so a theme
+  // keeps its color as the lattice grows. Themes past the eighth share the neutral "other" color.
   const order = themes.map(t => t.name);
-  const slot = name => order.indexOf(name) >= 0 && order.indexOf(name) < 5 ? `var(--series-${order.indexOf(name) + 1})` : "var(--unthemed)";
-  const color = n => n.themes.length ? slot(n.themes[0]) : "var(--unthemed)";
+  const MAX = 8;
+  const slot = name => { const i = order.indexOf(name); return i >= 0 && i < MAX ? `var(--series-${i + 1})` : "var(--unthemed)"; };
+  // An idea in several themes takes the color of the first in that same stable order.
+  const color = n => { const mine = order.filter(name => n.themes.includes(name)); return mine.length ? slot(mine[0]) : "var(--unthemed)"; };
   const captured = nodes.filter(n => n.origin === "captured").length;
   document.getElementById("counts").textContent =
     `${nodes.length} ideas (${captured} captured, ${nodes.length - captured} from the archive) · ${links.length} connections`;
   document.getElementById("legend").innerHTML =
-    order.slice(0, 5).map(name => `<span><i class="sw" style="background:${slot(name)}"></i>${esc(name)}</span>`).join("") +
-    `<span><i class="sw" style="background:var(--unthemed)"></i>No theme yet</span>` +
+    themes.slice(0, MAX).map(t => `<span><i class="sw" style="background:${slot(t.name)}"></i>${esc(t.name)}` +
+      `${t.proposed && !t.pinned ? " <em>(proposed)</em>" : ""} · ${t.ideas}</span>`).join("") +
+    `<span><i class="sw" style="background:var(--unthemed)"></i>${themes.length > MAX ? "Other or no theme" : "No theme"}</span>` +
     `<span><i class="ln"></i>evolves</span><span><i class="ln" style="border-top-style:dashed"></i>archive link</span>` +
     `<span><i class="ln" style="border-top-width:1px;border-color:var(--edge)"></i>related</span>`;
 
@@ -137,11 +143,17 @@ function draw({nodes, links, themes}) {
   const label = g.append("g").selectAll("text").data(nodes.filter(n => labelled.has(n.id))).join("text")
     .text(n => n.title).attr("dx", 10).attr("dy", 4);
 
+  // Each theme gets an anchor on a ring and pulls its ideas toward it, so themes read as regions.
+  // Unthemed ideas drift to the middle.
+  const R = Math.min(W, H) * 0.36;
+  const anchor = Object.fromEntries(order.map((name, i) =>
+    [name, [W / 2 + R * Math.cos(2 * Math.PI * i / order.length - Math.PI / 2),
+            H / 2 + R * Math.sin(2 * Math.PI * i / order.length - Math.PI / 2)]]));
+  const home = n => { const t = order.find(name => n.themes.includes(name)); return t ? anchor[t] : [W / 2, H / 2]; };
   const sim = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id(n => n.id).distance(l => l.kind === "related" ? 70 : 50).strength(0.6))
-    .force("charge", d3.forceManyBody().strength(-60))
-    .force("center", d3.forceCenter(W / 2, H / 2))
-    .force("x", d3.forceX(W / 2).strength(0.04)).force("y", d3.forceY(H / 2).strength(0.04))
+    .force("link", d3.forceLink(links).id(n => n.id).distance(l => l.kind === "related" ? 70 : 50).strength(0.3))
+    .force("charge", d3.forceManyBody().strength(-45))
+    .force("x", d3.forceX(n => home(n)[0]).strength(0.12)).force("y", d3.forceY(n => home(n)[1]).strength(0.12))
     .force("collide", d3.forceCollide(n => radius(n) + 2))
     .stop();
   const place = () => {
