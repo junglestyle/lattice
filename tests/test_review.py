@@ -78,3 +78,39 @@ def test_a_discard_hides_the_capture_and_keeps_its_note(url, admin):
                              (body["event_id"],)).fetchone()[0] == {"note": "garbled"}
     finally:
         admin.execute("DELETE FROM pub.feedback_events WHERE event_id = %s", (body.get("event_id"),))
+
+
+def test_correcting_an_idea_shows_at_once_and_keeps_claudes_version(url, admin):
+    cookie = login(url)
+    idea, title, statement = admin.execute(
+        "SELECT idea_id, title, statement FROM pub.ideas WHERE origin = 'captured' AND NOT corrected LIMIT 1").fetchone()
+    assert post(url + "/api/feedback", cookie, {"kind": "idea_correct", "idea_id": str(idea)})[0] == 400   # nothing to set
+    made = []
+    try:
+        for event in [{"kind": "idea_correct", "idea_id": str(idea), "statement": "  What I actually meant.  "},
+                      {"kind": "idea_note", "idea_id": str(idea), "note": "Said at the bar, as a joke."}]:
+            status, body = post(url + "/api/feedback", cookie, event)
+            assert status == 201
+            made.append(body["event_id"])
+        shown = json.loads(request(url + f"/api/idea/{idea}", cookie)[2])
+        assert shown["statement"] == "What I actually meant." and shown["title"] == title
+        assert shown["claude_statement"] == statement and shown["corrected"] is True
+        assert shown["my_note"] == "Said at the bar, as a joke."
+    finally:
+        admin.execute("DELETE FROM pub.feedback_events WHERE event_id = ANY(%s)", (made,))
+
+
+def test_a_keep_can_carry_a_note(url, admin):
+    cookie = login(url)
+    review = json.loads(request(url + "/api/review", cookie)[2])
+    if not review["items"]:
+        pytest.skip("nothing waiting for review in this database")
+    item = review["items"][0]
+    assert item["idea"] is None or {"id", "title", "statement"} <= set(item["idea"])
+    status, body = post(url + "/api/feedback", cookie, {"kind": "item_keep", "item_id": item["id"], "note": "connects to frames"})
+    try:
+        assert status == 201
+        assert admin.execute("SELECT payload FROM pub.feedback_events WHERE event_id = %s",
+                             (body["event_id"],)).fetchone()[0] == {"note": "connects to frames"}
+    finally:
+        admin.execute("DELETE FROM pub.feedback_events WHERE event_id = %s", (body.get("event_id"),))

@@ -91,7 +91,17 @@
   .actions .row { max-width: 640px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
   .actions button { padding: 14px 0; font-size: 16px; border-radius: 10px; }
   .actions .why { max-width: 640px; margin: 0 auto 10px; display: none; }
-  .actions.asking .why { display: block; }
+  .actions.asking .why, .actions.noting .why { display: block; }
+  .actions.noting .chips { display: none; }
+  .linkbtn { background: none; border: 0; padding: 0; color: var(--text-secondary); text-decoration: underline;
+             font-size: 13px; }
+  .actions .notes-toggle { max-width: 640px; margin: 0 auto 8px; }
+  .actions.asking .notes-toggle, .actions.noting .notes-toggle { display: none; }
+  .editor { display: grid; gap: 8px; margin: 8px 0 14px; padding: 10px; border: 1px solid var(--border);
+            border-radius: 8px; background: var(--surface-2); }
+  .editor label { display: grid; gap: 3px; font-size: 12px; color: var(--text-secondary); }
+  .editor input, .editor textarea { width: 100%; font-size: 15px; padding: 7px 9px; background: var(--surface-1); }
+  .editor .edrow { display: flex; gap: 8px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
   .chips button { border-radius: 999px; padding: 5px 12px; font-size: 13px; }
   .chips button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
@@ -200,11 +210,13 @@ function renderCard() {
         <span>${when(item.said_at)}</span><span>confidence ${Math.round(item.confidence * 100)}%</span></div>
       <p class="quote">“${esc(item.quote)}”</p>
       <p class="gist">${esc(item.gist)}</p>
-      ${item.idea ? `<p class="idea">In the lattice as: ${esc(item.idea)}</p>` : ""}
+      ${item.idea ? `<p class="idea">In the lattice as: <b>${esc(item.idea.title)}</b>
+        <button class="linkbtn" id="fix">Fix</button></p><div id="cardedit"></div>` : ""}
       <div class="ctx">${item.context.map(l =>
         `<p class="${l.source ? "src" : ""}"><b>${esc(l.speaker)}:</b> ${esc(l.text)}</p>`).join("")}</div>
     </article>
     <div class="actions" id="actions">
+      <div class="notes-toggle"><button class="linkbtn" id="notebtn">Add a note</button></div>
       <div class="why">
         <div class="chips">${REASONS.map(r => `<button type="button" aria-pressed="false">${r}</button>`).join("")}</div>
         <input id="why" placeholder="Why discard? (optional; helps tune the prompt)" maxlength="500">
@@ -232,16 +244,53 @@ function renderCard() {
   });
   document.getElementById("keep").addEventListener("click", () => {
     if (actions.classList.contains("asking")) { renderCard(); return; }   // Cancel
-    decide("item_keep");
+    decide("item_keep", why.value);
   });
-  document.getElementById("star").addEventListener("click", () => decide("item_star"));
-  why.addEventListener("keydown", e => { if (e.key === "Enter") decide("item_discard", why.value); });
+  document.getElementById("star").addEventListener("click", () => decide("item_star", why.value));
+  why.addEventListener("keydown", e => {
+    if (e.key === "Enter") actions.classList.contains("asking") ? decide("item_discard", why.value) : decide("item_keep", why.value);
+  });
+  document.getElementById("notebtn").addEventListener("click", () => {
+    actions.classList.add("noting");
+    why.placeholder = "A note on why it matters (optional)";
+    why.focus();
+  });
+  document.getElementById("fix")?.addEventListener("click", () =>
+    editor(document.getElementById("cardedit"), item.idea, saved => {
+      item.idea = {...item.idea, ...saved};
+      renderCard();
+    }));
+}
+
+// Correct an idea or give it context. Corrections are read straight from the events, so they show at once.
+function editor(host, idea, onSaved) {
+  host.innerHTML = `<div class="editor">
+      <label>Title<input id="ed-title" maxlength="120" value="${esc(idea.title)}"></label>
+      <label>What the idea is<textarea id="ed-statement" rows="3" maxlength="1000">${esc(idea.statement)}</textarea></label>
+      <label>Context (optional): what Claude missed, where it came from<textarea id="ed-note" rows="2"
+        maxlength="1000">${esc(idea.note || "")}</textarea></label>
+      <div class="edrow"><button id="ed-save">Save</button><button id="ed-cancel">Cancel</button></div></div>`;
+  host.querySelector("#ed-cancel").addEventListener("click", () => host.innerHTML = "");
+  host.querySelector("#ed-save").addEventListener("click", async () => {
+    const title = host.querySelector("#ed-title").value.trim();
+    const statement = host.querySelector("#ed-statement").value.trim();
+    const note = host.querySelector("#ed-note").value.trim();
+    const fix = {};
+    if (title !== idea.title) fix.title = title;
+    if (statement !== idea.statement) fix.statement = statement;
+    try {
+      if (Object.keys(fix).length) await send({kind: "idea_correct", idea_id: idea.id, ...fix});
+      if (note !== (idea.note || "")) await send({kind: "idea_note", idea_id: idea.id, note});
+      toast("Saved");
+      onSaved({title: title || idea.title, statement: statement || idea.statement, note});
+    } catch (e) { toast(`Didn't save: ${e.message}`); }
+  });
 }
 
 async function decide(kind, note) {
   const item = queue[0];
   try {
-    await send({kind, item_id: item.id, note});
+    await send({kind, item_id: item.id, note: note || undefined});
     queue.shift(); waiting = Math.max(0, waiting - 1);
     toast({item_keep: "Kept", item_star: "Starred", item_discard: "Discarded"}[kind]);
     if (!queue.length && waiting) loadReview(); else renderCard();
@@ -401,8 +450,12 @@ async function show(id) {
     const node = graphData?.nodes.find(n => n.id === id);
     const verdict = {keep: "kept", star: "★", discard: "discarded"};
     document.getElementById("panel").innerHTML =
-      `<p><button id="back">← Themes</button> <button id="staridea">${d.starred ? "★ Starred" : "☆ Star"}</button></p>` +
+      `<p><button id="back">← Themes</button> <button id="staridea">${d.starred ? "★ Starred" : "☆ Star"}</button>` +
+      ` <button id="editidea">Edit</button></p><div id="paneledit"></div>` +
       `<h2>${esc(d.title)}</h2><p class="statement">${esc(d.statement)}</p>` +
+      (d.my_note ? `<p class="notes">Your note: ${esc(d.my_note)}</p>` : "") +
+      (d.corrected ? `<p class="meta">${d.origin === "archive" ? "Originally" : "Claude heard"}: ` +
+        `<i>${esc(d.claude_title)}</i> — ${esc(d.claude_statement)}</p>` : "") +
       `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : "Captured from conversation"}` +
       `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
       (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
@@ -410,6 +463,9 @@ async function show(id) {
         `<div class="by">${esc(ev.said_by)} · ${day(ev.said_at)} · ${esc(ev.kind)}` +
         `${ev.verdict ? ` · ${verdict[ev.verdict] || ev.verdict}` : ""}</div></div>`).join("");
     document.getElementById("back").addEventListener("click", () => renderThemes(graphData.themes));
+    document.getElementById("editidea").addEventListener("click", () =>
+      editor(document.getElementById("paneledit"), {id, title: d.title, statement: d.statement, note: d.my_note},
+             saved => { if (node) Object.assign(node, saved); show(id); }));
     document.getElementById("staridea").addEventListener("click", async () => {
       try {
         await send({kind: d.starred ? "unstar" : "star", idea_id: id});
