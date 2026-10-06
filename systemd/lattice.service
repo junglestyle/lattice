@@ -1,0 +1,16 @@
+# Lattice's map, always on. Listens on localhost only; `tailscale serve` exposes it to the tailnet over HTTPS
+# (https://eeyore.example.ts.net/). Install: systemd/install.sh. Logs: journalctl --user -u lattice
+[Unit]
+Description=Lattice: the idea lattice map
+Wants=ideamachine-db.service
+After=ideamachine-db.service
+
+[Service]
+WorkingDirectory=%h/data/code/lattice
+EnvironmentFile=%h/data/code/lattice/.env
+ExecStart=%h/.local/bin/uv run lattice serve --host 127.0.0.1 --port 8790
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
