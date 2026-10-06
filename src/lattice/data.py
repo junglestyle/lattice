@@ -1,5 +1,6 @@
-"""Reads Idea Machine's published lattice (schema pub) as role lattice_app. Read-only for now."""
+"""Reads Idea Machine's published lattice (schema pub) as role lattice_app. Its one write: appending feedback events."""
 
+import json
 import os
 from uuid import UUID
 
@@ -46,3 +47,42 @@ def idea(conn, idea_id: str) -> dict | None:
                        WHERE idea_id = %s ORDER BY said_at""", (idea_id,))]
     return {"title": title, "statement": statement, "origin": origin, "ref": ref, "notes": notes,
             "themes": list(themes), "starred": starred, "evidence": evidence}
+
+
+def review(conn, limit: int = 50) -> dict:
+    """Captures waiting for my verdict, most confident first, each with the conversation around it."""
+    rows = conn.execute(
+        """SELECT item_id, kind, said_by, quote, gist, themes, confidence, said_at, idea_title
+           FROM pub.review_items ORDER BY confidence DESC, said_at DESC LIMIT %s""", (limit,)).fetchall()
+    total = conn.execute("SELECT count(*) FROM pub.review_items").fetchone()[0]
+    ids = [r[0] for r in rows]
+    context: dict = {}
+    for item_id, source, speaker, text in conn.execute(
+            """SELECT item_id, source, speaker, text FROM pub.item_context WHERE item_id = ANY(%s)
+               ORDER BY item_id, ord""", (ids,)):
+        context.setdefault(item_id, []).append({"source": source, "speaker": speaker, "text": text})
+    items = [{"id": str(i), "kind": k, "said_by": who, "quote": q, "gist": g, "themes": list(th or []),
+              "confidence": c, "said_at": at.isoformat(), "idea": idea, "context": context.get(i, [])}
+             for i, k, who, q, g, th, c, at, idea in rows]
+    return {"total": total, "items": items}
+
+
+# What Lattice may say, and about what (ROADMAP §3.5). Everything else is refused before it reaches the database.
+EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_id",
+          "star": "idea_id", "unstar": "idea_id",
+          "pin_theme": "theme_id", "unpin_theme": "theme_id", "reject_theme": "theme_id"}
+
+
+def record(conn, event: dict) -> int:
+    """Append one feedback event. Raises ValueError for anything not in EVENTS."""
+    kind = event.get("kind")
+    if kind not in EVENTS:
+        raise ValueError(f"unknown kind {kind!r}")
+    target = EVENTS[kind]
+    ref = str(UUID(str(event.get(target, ""))))   # ValueError unless it's a UUID
+    payload = {}
+    if kind == "item_discard" and str(event.get("note") or "").strip():
+        payload["note"] = str(event["note"]).strip()[:500]
+    return conn.execute(
+        f"INSERT INTO pub.feedback_events (kind, {target}, payload) VALUES (%s, %s, %s) RETURNING event_id",
+        (kind, ref, json.dumps(payload))).fetchone()[0]

@@ -50,6 +50,9 @@ class Handler(BaseHTTPRequestHandler):
         return urllib.parse.urlsplit(self.path).path
 
     def do_POST(self) -> None:  # noqa: N802 (http.server's naming)
+        if self._path() == "/api/feedback":
+            self._feedback()
+            return
         if self._path() != "/login":
             self._json({"error": "not found"}, 404)
             return
@@ -59,6 +62,22 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect("/", auth.set_cookie(self._secure()))
         else:
             self._login_page(401, "That token didn't work.")
+
+    def _feedback(self) -> None:
+        """Append one feedback event. JSON only: a cross-site form can't send it, and the cookie is SameSite=Strict."""
+        if not auth.cookie_ok(self.headers.get("Cookie")):
+            self._json({"error": "log in first"}, 401)
+            return
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            self._json({"error": "JSON only"}, 415)
+            return
+        length = min(int(self.headers.get("Content-Length") or 0), 4096)
+        try:
+            event = json.loads(self.rfile.read(length) or b"{}")
+            with data.connect() as conn:
+                self._json({"event_id": data.record(conn, event)}, 201)
+        except (ValueError, TypeError, AttributeError) as e:
+            self._json({"error": str(e)}, 400)
 
     def do_GET(self) -> None:  # noqa: N802
         path = self._path()
@@ -83,10 +102,14 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/":
                     # "</" is escaped so no string in the data can close the script element.
                     graph = json.dumps(data.graph(conn)).replace("</", "<\\/")
-                    page = HERE.joinpath("index.html").read_text().replace("/*GRAPH*/null", graph, 1)
+                    review = json.dumps(data.review(conn)).replace("</", "<\\/")
+                    page = (HERE.joinpath("index.html").read_text().replace("/*GRAPH*/null", graph, 1)
+                            .replace("/*REVIEW*/null", review, 1))
                     self._send(200, page.encode(), "text/html; charset=utf-8")
                 elif path == "/api/graph":
                     self._json(data.graph(conn))
+                elif path == "/api/review":
+                    self._json(data.review(conn))
                 elif path.startswith("/api/idea/"):
                     found = data.idea(conn, path.removeprefix("/api/idea/"))
                     self._json(found or {"error": "no such idea"}, 200 if found else 404)

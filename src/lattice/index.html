@@ -13,7 +13,7 @@
 <style>
   :root {
     color-scheme: light;
-    --surface-1: #fcfcfb; --surface-2: #f2f1ed; --border: #dedcd5;
+    --surface-1: #fcfcfb; --surface-2: #f2f1ed; --surface-3: #e8e6df; --border: #dedcd5;
     --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7973;
     --edge: #b9b7af; --edge-strong: #6d6c66; --unthemed: #9a9890;
     --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
@@ -22,7 +22,7 @@
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
       color-scheme: dark;
-      --surface-1: #1a1a19; --surface-2: #242422; --border: #3a3936;
+      --surface-1: #1a1a19; --surface-2: #242422; --surface-3: #2f2f2c; --border: #3a3936;
       --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
       --edge: #4a4945; --edge-strong: #a09f97; --unthemed: #6f6e68;
       --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
@@ -31,29 +31,40 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--surface-1); color: var(--text-primary);
-         height: 100vh; display: grid; grid-template-rows: auto 1fr; }
-  header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; padding: 10px 16px;
-           border-bottom: 1px solid var(--border); }
+         height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto 1fr; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+           padding: calc(10px + env(safe-area-inset-top)) 16px 10px; border-bottom: 1px solid var(--border); }
   h1 { font-size: 16px; margin: 0; }
+  .tabs { display: flex; gap: 4px; }
+  .tabs button { padding: 5px 12px; }
+  .tabs button[aria-selected="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
+  .badge { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
   .counts { color: var(--text-secondary); }
-  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--text-secondary); font-size: 12px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--text-secondary); font-size: 12px; width: 100%; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
   .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .ln { width: 18px; height: 0; border-top: 2px solid var(--edge-strong); display: inline-block; }
-  input, button { font: inherit; color: var(--text-primary); background: var(--surface-2);
+  input, button, textarea { font: inherit; color: var(--text-primary); background: var(--surface-2);
                   border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
-  button[aria-pressed="true"] { border-color: var(--text-secondary); }
-  main { display: grid; grid-template-columns: 1fr 380px; min-height: 0; }
-  #graph, #list { min-height: 0; overflow: hidden; }
-  #list { overflow: auto; padding: 8px 16px; display: none; }
+  button { cursor: pointer; }
+  main { min-height: 0; display: grid; }
+  main > section { min-height: 0; display: none; }
+  main[data-view="review"] #review, main[data-view="list"] #list { display: block; overflow: auto; }
+  main[data-view="map"] #mapview { display: grid; grid-template-columns: 1fr 380px; }
+  header .map-only { display: none; }
+  body[data-view="map"] header .map-only { display: flex; }
+  #graph { min-height: 0; overflow: hidden; }
+  #list { padding: 8px 16px; }
   #panel { border-left: 1px solid var(--border); overflow: auto; padding: 16px; }
   #panel h2 { font-size: 15px; margin: 0 0 6px; }
   #panel .statement { margin: 0 0 10px; }
   #panel .meta, #panel .notes { color: var(--text-secondary); font-size: 13px; white-space: pre-wrap; }
   #panel .ev { border-top: 1px solid var(--border); padding: 8px 0; }
   #panel .ev q { display: block; }
-  #panel .ev .by { color: var(--text-muted); font-size: 12px; }
+  #panel .ev .by, .muted { color: var(--text-muted); font-size: 12px; }
   .hint { color: var(--text-muted); }
+  .theme-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-top: 1px solid var(--border); }
+  .theme-row .name { flex: 1; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--text-secondary); font-weight: 600; }
@@ -62,37 +73,213 @@
   .tip { position: fixed; pointer-events: none; background: var(--surface-2); color: var(--text-primary);
          border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; max-width: 320px;
          display: none; }
+
+  /* Review: one capture at a time, the decision buttons within thumb reach. */
+  #review { padding: 16px; }
+  .card { max-width: 640px; margin: 0 auto; padding-bottom: 150px; }
+  .card .meta { color: var(--text-secondary); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .card .quote { font-size: 19px; line-height: 1.4; margin: 12px 0 8px; }
+  .card .gist { color: var(--text-secondary); margin: 0 0 14px; }
+  .card .idea { color: var(--text-muted); font-size: 13px; margin: 0 0 14px; }
+  .ctx { border-top: 1px solid var(--border); padding-top: 10px; font-size: 14px; }
+  .ctx p { margin: 0 0 6px; color: var(--text-secondary); }
+  .ctx p.src { color: var(--text-primary); background: var(--surface-2); border-left: 3px solid var(--edge-strong);
+               padding: 4px 8px; border-radius: 0 4px 4px 0; }
+  .ctx b { font-weight: 600; }
+  .actions { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface-1); border-top: 1px solid var(--border);
+             padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
+  .actions .row { max-width: 640px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .actions button { padding: 14px 0; font-size: 16px; border-radius: 10px; }
+  .actions .why { max-width: 640px; margin: 0 auto 10px; display: none; }
+  .actions.asking .why { display: block; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chips button { border-radius: 999px; padding: 5px 12px; font-size: 13px; }
+  .chips button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
+  .why input { width: 100%; padding: 8px 10px; }
+  .done { max-width: 640px; margin: 48px auto; text-align: center; color: var(--text-secondary); }
+  .toast { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); background: var(--surface-3);
+           border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; display: none; }
+
+  #legendbtn { display: none; }
   @media (max-width: 760px) {
-    main { grid-template-columns: 1fr; grid-template-rows: 60vh auto; }
+    /* On a phone the legend folds away behind a button; the map gets the room. */
+    body[data-view="map"] #legendbtn { display: inline-block; }
+    body[data-view="map"] header .legend:not(.open) { display: none; }
+    main[data-view="map"] #mapview { grid-template-columns: 1fr; grid-template-rows: 60vh auto; overflow: auto; }
     #panel { border-left: 0; border-top: 1px solid var(--border); }
   }
 </style>
 </head>
-<body>
+<body data-view="review">
 <header>
   <h1>Lattice</h1>
-  <span class="counts" id="counts"></span>
-  <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas">
-  <button id="view" aria-pressed="false">List view</button>
-  <div class="legend" id="legend"></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="review">Review <span class="badge" id="badge"></span></button>
+    <button role="tab" data-tab="map">Map</button>
+    <button role="tab" data-tab="list">List</button>
+  </nav>
+  <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas"
+         style="display:none">
+  <span class="counts map-only" id="counts"></span>
+  <button id="legendbtn" aria-expanded="false">Legend</button>
+  <div class="legend map-only" id="legend"></div>
 </header>
-<main>
-  <div id="graph"></div>
-  <div id="list"></div>
-  <aside id="panel"><p class="hint">Click an idea to see its evidence. Outlined circles come from the archive;
-    filled ones were captured from conversations. Size grows with evidence.</p></aside>
+<main data-view="review">
+  <section id="review" aria-live="polite"></section>
+  <section id="mapview"><div id="graph"></div><aside id="panel"></aside></section>
+  <section id="list"></section>
 </main>
 <div class="tip" id="tip"></div>
+<div class="toast" id="toast" role="status"></div>
 <script>
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const day = iso => iso ? new Date(iso).toLocaleDateString(undefined, {month: "short", day: "numeric"}) : "";
+const when = iso => new Date(iso).toLocaleString(undefined, {weekday: "short", month: "short", day: "numeric",
+                                                             hour: "numeric", minute: "2-digit"});
+const store = {get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+               set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }};
+
+function toast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text; t.style.display = "block";
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", 2500);
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"},
+                                      body: JSON.stringify(body)} : {});
+  if (r.status === 401) { location.href = "/login"; throw new Error("logged out"); }
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+// The one write: feedback events. Idea Machine applies them on its next run.
+const send = event => api("/api/feedback", event);
+
+// --- Tabs --------------------------------------------------------------------------------------------------
+
+function setTab(tab) {
+  document.body.dataset.view = tab;
+  document.querySelector("main").dataset.view = tab;
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
+  document.getElementById("search").style.display = tab === "review" ? "none" : "";
+  store.set("tab", tab);
+  if (tab === "map") drawMap();
+  if (tab === "review") loadReview();
+}
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+
+// --- Review ------------------------------------------------------------------------------------------------
+
+const REASONS = ["no context", "not my interests", "garbled", "already have it", "too obvious"];
+let queue = [], waiting = 0;
+// The first batch comes embedded in the page, like the graph; later batches from the API.
+let embeddedReview = /*REVIEW*/null;
+
+async function loadReview() {
+  try {
+    const d = embeddedReview || await api("/api/review");
+    embeddedReview = null;
+    queue = d.items; waiting = d.total;
+    renderCard();
+  } catch (e) { toast(e.message); }
+}
+
+function renderCard() {
+  document.getElementById("badge").textContent = waiting ? `· ${waiting}` : "";
+  const box = document.getElementById("review");
+  const item = queue[0];
+  if (!item) {
+    box.innerHTML = `<div class="done"><p>Nothing waiting. New captures arrive with each hourly run.</p></div>`;
+    return;
+  }
+  box.innerHTML = `<article class="card">
+      <div class="meta"><span>${esc(item.kind)}</span><span>${esc(item.said_by)}</span>
+        <span>${when(item.said_at)}</span><span>confidence ${Math.round(item.confidence * 100)}%</span></div>
+      <p class="quote">“${esc(item.quote)}”</p>
+      <p class="gist">${esc(item.gist)}</p>
+      ${item.idea ? `<p class="idea">In the lattice as: ${esc(item.idea)}</p>` : ""}
+      <div class="ctx">${item.context.map(l =>
+        `<p class="${l.source ? "src" : ""}"><b>${esc(l.speaker)}:</b> ${esc(l.text)}</p>`).join("")}</div>
+    </article>
+    <div class="actions" id="actions">
+      <div class="why">
+        <div class="chips">${REASONS.map(r => `<button type="button" aria-pressed="false">${r}</button>`).join("")}</div>
+        <input id="why" placeholder="Why discard? (optional; helps tune the prompt)" maxlength="500">
+      </div>
+      <div class="row">
+        <button id="discard">Discard</button><button id="keep">Keep</button><button id="star">★ Star</button>
+      </div>
+    </div>`;
+  const actions = document.getElementById("actions");
+  const why = document.getElementById("why");
+  actions.querySelectorAll(".chips button").forEach(c => c.addEventListener("click", () => {
+    const on = c.getAttribute("aria-pressed") !== "true";
+    actions.querySelectorAll(".chips button").forEach(o => o.setAttribute("aria-pressed", false));
+    c.setAttribute("aria-pressed", on);
+    why.value = on ? c.textContent : "";
+  }));
+  document.getElementById("discard").addEventListener("click", () => {
+    if (!actions.classList.contains("asking")) {   // first tap asks why; the second confirms
+      actions.classList.add("asking");
+      document.getElementById("discard").textContent = "Discard ✓";
+      document.getElementById("keep").textContent = "Cancel";
+      return;
+    }
+    decide("item_discard", why.value);
+  });
+  document.getElementById("keep").addEventListener("click", () => {
+    if (actions.classList.contains("asking")) { renderCard(); return; }   // Cancel
+    decide("item_keep");
+  });
+  document.getElementById("star").addEventListener("click", () => decide("item_star"));
+  why.addEventListener("keydown", e => { if (e.key === "Enter") decide("item_discard", why.value); });
+}
+
+async function decide(kind, note) {
+  const item = queue[0];
+  try {
+    await send({kind, item_id: item.id, note});
+    queue.shift(); waiting = Math.max(0, waiting - 1);
+    toast({item_keep: "Kept", item_star: "Starred", item_discard: "Discarded"}[kind]);
+    if (!queue.length && waiting) loadReview(); else renderCard();
+  } catch (e) { toast(`Didn't save: ${e.message}`); }
+}
+
+document.addEventListener("keydown", e => {   // on a keyboard: k keep, * star, d discard
+  if (document.body.dataset.view !== "review" || e.target.tagName === "INPUT" || !queue.length) return;
+  if (e.key === "k") decide("item_keep");
+  else if (e.key === "*") decide("item_star");
+  else if (e.key === "d") document.getElementById("discard")?.click();
+});
+
+// --- Map and list ------------------------------------------------------------------------------------------
 
 // The server embeds the graph in the page (no second round trip); fall back to the API if it didn't.
 const embedded = /*GRAPH*/null;
-embedded ? draw(embedded) : fetch("/api/graph").then(r => r.json()).then(draw);
+let graphData = null, drawn = false;
+const graphReady = embedded ? Promise.resolve(embedded) : api("/api/graph");
+graphReady.then(g => { graphData = g; renderList(g.nodes); document.getElementById("counts").textContent =
+  `${g.nodes.length} ideas · ${g.links.length} connections`; if (document.body.dataset.view === "map") drawMap(); });
 
-function draw({nodes, links, themes}) {
+function renderList(rows) {
+  const list = document.getElementById("list");
+  list.innerHTML = `<table><thead><tr><th>Idea</th><th>From</th><th>Themes</th><th>Evidence</th><th>Last said</th></tr></thead><tbody>` +
+    [...rows].sort((a, b) => (b.last_said || "").localeCompare(a.last_said || "")).map(n =>
+      `<tr class="row" data-id="${n.id}"><td>${n.starred ? "★ " : ""}${esc(n.title)}</td>` +
+      `<td>${n.origin === "archive" ? esc(n.ref) : "captured"}</td>` +
+      `<td>${esc(n.themes.join(", "))}</td><td>${n.evidence}</td><td>${day(n.last_said)}</td></tr>`).join("") +
+    `</tbody></table>`;
+  list.querySelectorAll("tr.row").forEach(tr => tr.addEventListener("click", () => { setTab("map"); show(tr.dataset.id); }));
+}
+
+let mapNodes = null;
+function drawMap() {
+  if (drawn || !graphData) return;
+  drawn = true;
+  const {nodes, links, themes} = graphData;
   // Themes take the 8 categorical slots in the server's stable order (pinned first, then oldest), so a theme
   // keeps its color as the lattice grows. Themes past the eighth share the neutral "other" color.
   const order = themes.map(t => t.name);
@@ -100,15 +287,13 @@ function draw({nodes, links, themes}) {
   const slot = name => { const i = order.indexOf(name); return i >= 0 && i < MAX ? `var(--series-${i + 1})` : "var(--unthemed)"; };
   // An idea in several themes takes the color of the first in that same stable order.
   const color = n => { const mine = order.filter(name => n.themes.includes(name)); return mine.length ? slot(mine[0]) : "var(--unthemed)"; };
-  const captured = nodes.filter(n => n.origin === "captured").length;
-  document.getElementById("counts").textContent =
-    `${nodes.length} ideas (${captured} captured, ${nodes.length - captured} from the archive) · ${links.length} connections`;
   document.getElementById("legend").innerHTML =
     themes.slice(0, MAX).map(t => `<span><i class="sw" style="background:${slot(t.name)}"></i>${esc(t.name)}` +
       `${t.proposed && !t.pinned ? " <em>(proposed)</em>" : ""} · ${t.ideas}</span>`).join("") +
     `<span><i class="sw" style="background:var(--unthemed)"></i>${themes.length > MAX ? "Other or no theme" : "No theme"}</span>` +
     `<span><i class="ln"></i>evolves</span><span><i class="ln" style="border-top-style:dashed"></i>archive link</span>` +
     `<span><i class="ln" style="border-top-width:1px;border-color:var(--edge)"></i>related</span>`;
+  renderThemes(themes);
 
   const degree = Object.fromEntries(nodes.map(n => [n.id, 0]));
   links.forEach(l => { degree[l.source]++; degree[l.target]++; });
@@ -123,7 +308,8 @@ function draw({nodes, links, themes}) {
     .attr("refY", 5).attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
     .append("path").attr("d", "M0,0L10,5L0,10z").attr("fill", css("--edge-strong"));
   const g = svg.append("g");
-  svg.call(d3.zoom().scaleExtent([0.3, 4]).on("zoom", e => g.attr("transform", e.transform)));
+  const zoom = d3.zoom().scaleExtent([0.2, 4]).on("zoom", e => g.attr("transform", e.transform));
+  svg.call(zoom);
 
   const edge = g.append("g").selectAll("line").data(links).join("line")
     .attr("stroke", l => l.kind === "related" ? css("--edge") : css("--edge-strong"))
@@ -138,7 +324,7 @@ function draw({nodes, links, themes}) {
     .style("cursor", "pointer")
     .on("mousemove", (e, n) => { const t = document.getElementById("tip");
       t.style.display = "block"; t.style.left = e.clientX + 12 + "px"; t.style.top = e.clientY + 12 + "px";
-      t.textContent = `${n.title}${n.evidence ? ` · ${n.evidence} piece${n.evidence > 1 ? "s" : ""} of evidence` : ""}`; })
+      t.textContent = `${n.starred ? "★ " : ""}${n.title}${n.evidence ? ` · ${n.evidence} piece${n.evidence > 1 ? "s" : ""} of evidence` : ""}`; })
     .on("mouseleave", () => { document.getElementById("tip").style.display = "none"; })
     .on("click", (e, n) => show(n.id))
     .call(d3.drag()
@@ -168,46 +354,76 @@ function draw({nodes, links, themes}) {
   };
   sim.tick(300);   // settle before the first paint, so the map doesn't jiggle into place
   place();
+  // Start zoomed to fit every idea: on a phone the layout is wider than the screen.
+  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y), pad = 24;
+  const [x0, x1, y0, y1] = [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...ys) - pad, Math.max(...ys) + pad];
+  const k = Math.min(1.2, W / (x1 - x0), H / (y1 - y0));
+  svg.call(zoom.transform, d3.zoomIdentity.translate(W / 2 - k * (x0 + x1) / 2, H / 2 - k * (y0 + y1) / 2).scale(k));
   sim.on("tick", place);   // dragging restarts it
-
-  document.getElementById("search").addEventListener("input", e => {
-    const q = e.target.value.trim().toLowerCase();
-    const hit = n => !q || (n.title + " " + n.statement).toLowerCase().includes(q);
-    node.attr("opacity", n => hit(n) ? 1 : 0.15);
-    renderList(nodes.filter(hit));
-  });
-
-  const list = document.getElementById("list");
-  function renderList(rows) {
-    list.innerHTML = `<table><thead><tr><th>Idea</th><th>From</th><th>Themes</th><th>Evidence</th><th>Last said</th></tr></thead><tbody>` +
-      [...rows].sort((a, b) => (b.last_said || "").localeCompare(a.last_said || "")).map(n =>
-        `<tr class="row" data-id="${n.id}"><td>${esc(n.title)}</td><td>${n.origin === "archive" ? esc(n.ref) : "captured"}</td>` +
-        `<td>${esc(n.themes.join(", "))}</td><td>${n.evidence}</td><td>${day(n.last_said)}</td></tr>`).join("") +
-      `</tbody></table>`;
-    list.querySelectorAll("tr.row").forEach(tr => tr.addEventListener("click", () => show(tr.dataset.id)));
-  }
-  renderList(nodes);
-  document.getElementById("view").addEventListener("click", e => {
-    const listing = e.target.getAttribute("aria-pressed") !== "true";
-    e.target.setAttribute("aria-pressed", listing);
-    e.target.textContent = listing ? "Map view" : "List view";
-    box.style.display = listing ? "none" : "block";
-    list.style.display = listing ? "block" : "none";
-  });
+  mapNodes = node;
 }
 
-function show(id) {
-  fetch(`/api/idea/${id}`).then(r => r.json()).then(d => {
+document.getElementById("legendbtn").addEventListener("click", e => {
+  const open = document.getElementById("legend").classList.toggle("open");
+  e.target.setAttribute("aria-expanded", open);
+});
+
+document.getElementById("search").addEventListener("input", e => {
+  if (!graphData) return;
+  const q = e.target.value.trim().toLowerCase();
+  const hit = n => !q || (n.title + " " + n.statement).toLowerCase().includes(q);
+  if (mapNodes) mapNodes.attr("opacity", n => hit(n) ? 1 : 0.15);
+  renderList(graphData.nodes.filter(hit));
+});
+
+// The panel with nothing selected: themes, with Pin / Reject for the proposals.
+function renderThemes(themes) {
+  document.getElementById("panel").innerHTML =
+    `<p class="hint">Click an idea to see its evidence. Outlined circles come from the archive; filled ones were
+     captured from conversation. Size grows with evidence.</p><h2>Themes</h2>` +
+    themes.map(t => `<div class="theme-row" data-id="${t.id}"><span class="name">${esc(t.name)}
+        <span class="muted">· ${t.ideas}${t.pinned ? "" : t.proposed ? " · proposed" : ""}</span></span>` +
+      (t.proposed && !t.pinned ? `<button data-act="pin_theme">Pin</button><button data-act="reject_theme">Reject</button>` : "") +
+      `</div>`).join("");
+  document.querySelectorAll(".theme-row button").forEach(b => b.addEventListener("click", async () => {
+    const row = b.closest(".theme-row");
+    try {
+      await send({kind: b.dataset.act, theme_id: row.dataset.id});
+      row.querySelectorAll("button").forEach(x => x.remove());
+      row.querySelector(".muted").textContent += b.dataset.act === "pin_theme" ? " · pinned (next run)" : " · rejected (next run)";
+    } catch (e) { toast(`Didn't save: ${e.message}`); }
+  }));
+}
+
+async function show(id) {
+  try {
+    const d = await api(`/api/idea/${id}`);
+    const node = graphData?.nodes.find(n => n.id === id);
+    const verdict = {keep: "kept", star: "★", discard: "discarded"};
     document.getElementById("panel").innerHTML =
+      `<p><button id="back">← Themes</button> <button id="staridea">${d.starred ? "★ Starred" : "☆ Star"}</button></p>` +
       `<h2>${esc(d.title)}</h2><p class="statement">${esc(d.statement)}</p>` +
       `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : "Captured from conversation"}` +
       `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
       (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
       d.evidence.map(ev => `<div class="ev"><q>${esc(ev.quote)}</q>` +
         `<div class="by">${esc(ev.said_by)} · ${day(ev.said_at)} · ${esc(ev.kind)}` +
-        `${ev.verdict ? ` · ${ev.verdict === "keep" ? "kept" : "discarded"}` : ""}</div></div>`).join("");
-  });
+        `${ev.verdict ? ` · ${verdict[ev.verdict] || ev.verdict}` : ""}</div></div>`).join("");
+    document.getElementById("back").addEventListener("click", () => renderThemes(graphData.themes));
+    document.getElementById("staridea").addEventListener("click", async () => {
+      try {
+        await send({kind: d.starred ? "unstar" : "star", idea_id: id});
+        d.starred = !d.starred;
+        if (node) node.starred = d.starred;
+        document.getElementById("staridea").textContent = d.starred ? "★ Starred" : "☆ Star";
+      } catch (e) { toast(`Didn't save: ${e.message}`); }
+    });
+  } catch (e) { toast(e.message); }
 }
+
+// #review, #map or #list opens that tab (bookmarkable); otherwise the last one used.
+const fromHash = location.hash.slice(1);
+setTab(["review", "map", "list"].includes(fromHash) ? fromHash : store.get("tab") || "review");
 </script>
 </body>
 </html>
