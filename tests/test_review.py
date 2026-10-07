@@ -114,3 +114,12 @@ def test_a_keep_can_carry_a_note(url, admin):
                              (body["event_id"],)).fetchone()[0] == {"note": "connects to frames"}
     finally:
         admin.execute("DELETE FROM pub.feedback_events WHERE event_id = %s", (body.get("event_id"),))
+
+
+def test_status_reports_recent_runs_and_spend(url):
+    cookie = login(url)
+    assert request(url + "/api/status")[0] == 401
+    status = json.loads(request(url + "/api/status", cookie)[2])
+    assert {"now", "spent", "runs"} <= set(status) and status["spent"] >= 0
+    for run in status["runs"]:
+        assert {"started_at", "error", "warnings", "captured", "cost"} <= set(run)

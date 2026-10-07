@@ -103,13 +103,16 @@ class Handler(BaseHTTPRequestHandler):
                     # "</" is escaped so no string in the data can close the script element.
                     graph = json.dumps(data.graph(conn)).replace("</", "<\\/")
                     review = json.dumps(data.review(conn)).replace("</", "<\\/")
+                    status = json.dumps(data.status(conn)).replace("</", "<\\/")
                     page = (HERE.joinpath("index.html").read_text().replace("/*GRAPH*/null", graph, 1)
-                            .replace("/*REVIEW*/null", review, 1))
+                            .replace("/*REVIEW*/null", review, 1).replace("/*STATUS*/null", status, 1))
                     self._send(200, page.encode(), "text/html; charset=utf-8")
                 elif path == "/api/graph":
                     self._json(data.graph(conn))
                 elif path == "/api/review":
                     self._json(data.review(conn))
+                elif path == "/api/status":
+                    self._json(data.status(conn))
                 elif path.startswith("/api/idea/"):
                     found = data.idea(conn, path.removeprefix("/api/idea/"))
                     self._json(found or {"error": "no such idea"}, 200 if found else 404)

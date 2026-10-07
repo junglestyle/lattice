@@ -97,3 +97,16 @@ def record(conn, event: dict) -> int:
     return conn.execute(
         f"INSERT INTO pub.feedback_events (kind, {target}, payload) VALUES (%s, %s, %s) RETURNING event_id",
         (kind, ref, json.dumps(payload))).fetchone()[0]
+
+
+def status(conn) -> dict:
+    """The recent hourly runs and this month's spend, for the header's status line."""
+    runs = [{"started_at": a.isoformat(), "finished_at": b.isoformat() if b else None, "error": err,
+             "warnings": list(w or []), "conversations": conv, "read": read, "captured": cap, "refused": ref,
+             "cost": float(cost or 0), "cap": float(mc) if mc is not None else None}
+            for a, b, err, w, conv, read, cap, ref, cost, mc in conn.execute(
+                """SELECT started_at, finished_at, error, warnings, conversations_changed, episodes_read, captured,
+                          refused, cost_usd, monthly_cap_usd FROM pub.runs ORDER BY started_at DESC LIMIT 24""")]
+    spent = conn.execute("SELECT month_to_date FROM pub.spend").fetchone()[0]
+    now = conn.execute("SELECT now()").fetchone()[0]
+    return {"now": now.isoformat(), "spent": float(spent), "runs": runs}

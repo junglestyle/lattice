@@ -18,6 +18,7 @@
     --edge: #b9b7af; --edge-strong: #6d6c66; --unthemed: #9a9890;
     --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
     --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
+    --status-good: #0ca30c; --status-warning: #fab219; --status-critical: #d03b3b;   /* never themed */
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
@@ -107,6 +108,21 @@
   .chips button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   .why input { width: 100%; padding: 8px 10px; }
   .done { max-width: 640px; margin: 48px auto; text-align: center; color: var(--text-secondary); }
+  /* Run status: an icon in the status color, the words in text colors (never color alone). */
+  .status { margin-left: auto; background: none; border: 0; padding: 2px 0; font-size: 13px;
+            color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; text-align: left; }
+  .status .ico { font-weight: 700; }
+  .status[data-level="good"] .ico { color: var(--status-good); }
+  .status[data-level="warning"] .ico { color: var(--status-warning); }
+  .status[data-level="critical"] .ico { color: var(--status-critical); }
+  .status[data-level="critical"] { color: var(--text-primary); }
+  #runs { display: none; position: fixed; right: 12px; top: calc(52px + env(safe-area-inset-top)); z-index: 5;
+          width: min(420px, calc(100vw - 24px)); max-height: 60vh; overflow: auto; background: var(--surface-1);
+          border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; box-shadow: 0 6px 24px #0003; }
+  #runs.open { display: block; }
+  #runs .run { border-top: 1px solid var(--border); padding: 6px 0; font-size: 13px; }
+  #runs .run:first-of-type { border-top: 0; }
+  #runs .msg { color: var(--text-secondary); white-space: pre-wrap; }
   .toast { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); background: var(--surface-3);
            border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; display: none; }
 
@@ -130,6 +146,7 @@
   </nav>
   <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas"
          style="display:none">
+  <button class="status" id="status" aria-haspopup="true" aria-expanded="false"></button>
   <span class="counts map-only" id="counts"></span>
   <button id="legendbtn" aria-expanded="false">Legend</button>
   <div class="legend map-only" id="legend"></div>
@@ -140,6 +157,7 @@
   <section id="list"></section>
 </main>
 <div class="tip" id="tip"></div>
+<div id="runs" role="dialog" aria-label="Recent runs"></div>
 <div class="toast" id="toast" role="status"></div>
 <script>
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -167,6 +185,54 @@ async function api(path, body) {
 
 // The one write: feedback events. Idea Machine applies them on its next run.
 const send = event => api("/api/feedback", event);
+
+// --- Run status ------------------------------------------------------------------------------------------
+// Is the unattended hourly run healthy? Worst problem first; the run list says more.
+
+const hhmm = iso => new Date(iso).toLocaleTimeString(undefined, {hour: "numeric", minute: "2-digit"});
+const money = x => `$${x.toFixed(2)}`;
+let statusData = /*STATUS*/null;
+
+function judge({now, spent, runs}) {
+  const last = runs[0];
+  const cap = runs.find(r => r.cap)?.cap;
+  const spend = cap ? `${money(spent)} of ${money(cap)}` : money(spent);
+  if (!last) return ["warning", "\u26a0", "No runs recorded yet"];
+  const age = (new Date(now) - new Date(last.started_at)) / 3.6e6;   // hours
+  if (last.error) return ["critical", "\u2715", `Last run failed (${hhmm(last.started_at)}): ${last.error}`];
+  if (!last.finished_at && age > 1) return ["critical", "\u2715", `Last run didn't finish (${hhmm(last.started_at)})`];
+  if (age > 2) return ["warning", "\u26a0", `No run since ${hhmm(last.started_at)}`];
+  if (last.warnings.length) return ["warning", "\u26a0", `${hhmm(last.started_at)}: ${last.warnings[0]}`];
+  if (cap && spent >= 0.8 * cap) return ["warning", "\u26a0", `${spend} this month`];
+  const news = last.captured ? `${last.captured} new` : "nothing new";
+  return ["good", "\u2713", `${hhmm(last.started_at)} \u00b7 ${news} \u00b7 ${spend}`];
+}
+
+function renderStatus() {
+  if (!statusData) return;
+  const [level, icon, text] = judge(statusData);
+  const el = document.getElementById("status");
+  el.dataset.level = level;
+  el.innerHTML = `<span class="ico" aria-hidden="true">${icon}</span><span>${esc(text)}</span>`;
+  el.setAttribute("aria-label", `Run status: ${level === "good" ? "OK" : level}. ${text}`);
+  document.getElementById("runs").innerHTML = `<b>Recent runs</b> <span class="muted">\u00b7 ${money(statusData.spent)} this month</span>` +
+    statusData.runs.map(r => `<div class="run"><div>${r.error ? "\u2715" : r.warnings.length ? "\u26a0" : "\u2713"}
+        ${when(r.started_at)} \u00b7 ${r.captured} captured \u00b7 ${r.read} read \u00b7 ${money(r.cost)}</div>
+        ${r.error ? `<div class="msg">${esc(r.error)}</div>` : ""}
+        ${r.warnings.map(w => `<div class="msg">${esc(w)}</div>`).join("")}</div>`).join("");
+}
+
+async function refreshStatus() {
+  try { statusData = await api("/api/status"); renderStatus(); } catch {}
+}
+
+document.getElementById("status").addEventListener("click", e => {
+  const open = document.getElementById("runs").classList.toggle("open");
+  e.currentTarget.setAttribute("aria-expanded", open);
+});
+// Coming back to the app (it stays open on a phone): fetch a fresh status.
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshStatus(); });
+statusData ? renderStatus() : refreshStatus();
 
 // --- Tabs --------------------------------------------------------------------------------------------------
 
