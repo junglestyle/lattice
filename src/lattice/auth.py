@@ -37,6 +37,12 @@ def cookie_ok(header: str | None) -> bool:
     return False
 
 
+def bearer_ok(header: str | None) -> bool:
+    """`Authorization: Bearer <LATTICE_TOKEN>`, for the MCP endpoint (a client there has no cookie)."""
+    scheme, _, value = (header or "").partition(" ")
+    return scheme.lower() == "bearer" and token_ok(value.strip())
+
+
 def set_cookie(secure: bool) -> str:
     return (f"{COOKIE}={session_value()}; Max-Age={MAX_AGE}; Path=/; HttpOnly; SameSite=Strict"
             + ("; Secure" if secure else ""))

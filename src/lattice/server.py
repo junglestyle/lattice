@@ -10,7 +10,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
-from lattice import auth, data
+from lattice import auth, data, mcp
 
 HERE = resources.files("lattice")
 STATIC = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
@@ -51,6 +51,9 @@ class Handler(BaseHTTPRequestHandler):
         return urllib.parse.urlsplit(self.path).path
 
     def do_POST(self) -> None:  # noqa: N802 (http.server's naming)
+        if self._path() == "/mcp":
+            self._mcp()
+            return
         if self._path() == "/api/feedback":
             self._feedback()
             return
@@ -80,8 +83,37 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError, AttributeError) as e:
             self._json({"error": str(e)}, 400)
 
+    def _mcp(self) -> None:
+        """MCP over Streamable HTTP (lattice.mcp), JSON responses only. The bearer token is LATTICE_TOKEN. A browser
+        page can't use it: it would need the token, and a request with a foreign Origin is refused outright."""
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlsplit(origin).netloc != self.headers.get("Host"):
+            self._json({"error": "foreign origin"}, 403)
+            return
+        if not auth.bearer_ok(self.headers.get("Authorization")):
+            self._send(401, b'{"error": "bearer token required"}', "application/json", {"WWW-Authenticate": "Bearer"})
+            return
+        length = min(int(self.headers.get("Content-Length") or 0), 65536)
+        try:
+            message = json.loads(self.rfile.read(length) or b"null")
+        except ValueError:
+            self._json(mcp._error(None, -32700, "parse error"), 400)
+            return
+        if isinstance(message, list):   # a batch (older protocol versions)
+            answers = [a for a in (mcp.handle(m) for m in message) if a is not None]
+            self._json(answers) if answers else self._send(202, b"", "application/json")
+            return
+        answer = mcp.handle(message)
+        self._json(answer) if answer is not None else self._send(202, b"", "application/json")
+
+    def do_DELETE(self) -> None:  # noqa: N802  (MCP session teardown: there are no sessions)
+        self._json({"error": "no sessions"}, 405)
+
     def do_GET(self) -> None:  # noqa: N802
         path = self._path()
+        if path == "/mcp":   # no server-initiated stream
+            self._send(405, b'{"error": "POST only"}', "application/json", {"Allow": "POST"})
+            return
         if path in STATIC:
             name, kind = STATIC[path]
             self._send(200, HERE.joinpath("static", name).read_bytes(), kind)

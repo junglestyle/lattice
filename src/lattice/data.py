@@ -114,8 +114,8 @@ EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_
           "link": "idea_id", "unlink": "idea_id"}
 
 
-def record(conn, event: dict) -> int:
-    """Append one feedback event. Raises ValueError for anything not in EVENTS."""
+def record(conn, event: dict, source: str = "lattice") -> int:
+    """Append one feedback event. Raises ValueError for anything not in EVENTS. `source`: the app, or 'mcp'."""
     kind = event.get("kind")
     if kind not in EVENTS:
         raise ValueError(f"unknown kind {kind!r}")
@@ -136,8 +136,8 @@ def record(conn, event: dict) -> int:
         if other == ref:
             raise ValueError("an idea can't link to itself")
     return conn.execute(
-        f"""INSERT INTO pub.feedback_events (kind, {target}, other_idea_id, payload) VALUES (%s, %s, %s, %s)
-            RETURNING event_id""", (kind, ref, other, json.dumps(payload))).fetchone()[0]
+        f"""INSERT INTO pub.feedback_events (kind, {target}, other_idea_id, payload, source)
+            VALUES (%s, %s, %s, %s, %s) RETURNING event_id""", (kind, ref, other, json.dumps(payload), source)).fetchone()[0]
 
 
 def status(conn) -> dict:
