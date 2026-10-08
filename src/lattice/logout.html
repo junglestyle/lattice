@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lattice</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 16px/1.4 system-ui, sans-serif;
+         background: #fcfcfb; color: #52514e; }
+  @media (prefers-color-scheme: dark) { body { background: #1a1a19; color: #c3c2b7; } }
+</style>
+</head>
+<body>
+<p>Logging out and clearing this device&hellip;</p>
+<script>
+// Clear-Site-Data does this where the browser supports it; this covers the rest. The copy of the lattice on the
+// device holds other people's words, so it goes with the session.
+(async () => {
+  try { localStorage.clear(); } catch {}
+  try { await new Promise(done => { const r = indexedDB.deleteDatabase("lattice"); r.onsuccess = r.onerror = r.onblocked = done; }); } catch {}
+  try { for (const k of await caches.keys()) await caches.delete(k); } catch {}
+  try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch {}
+  location.replace("/login");
+})();
+</script>
+</body>
+</html>

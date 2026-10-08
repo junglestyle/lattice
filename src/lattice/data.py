@@ -18,12 +18,14 @@ def connect() -> psycopg.Connection:
 def graph(conn) -> dict:
     ideas = conn.execute(
         """SELECT idea_id, title, statement, origin, archive_ref, themes, n_evidence, kept, discarded, starred,
-                  first_said, last_said, corrected
+                  first_said, last_said, corrected, created_at
            FROM pub.ideas""").fetchall()
+    where = positions(conn)
     nodes = [{"id": str(i), "title": t, "statement": s, "origin": o, "ref": ref, "themes": list(th),
-              "evidence": n, "kept": k, "discarded": d, "starred": st, "corrected": c,
-              "first_said": f.isoformat() if f else None, "last_said": last.isoformat() if last else None}
-             for i, t, s, o, ref, th, n, k, d, st, f, last, c in ideas]
+              "evidence": n, "kept": k, "discarded": d, "starred": st, "corrected": c, "created_at": made.isoformat(),
+              "first_said": f.isoformat() if f else None, "last_said": last.isoformat() if last else None,
+              "pos": where.get(i)}
+             for i, t, s, o, ref, th, n, k, d, st, f, last, c, made in ideas]
     links = [{"source": str(a), "target": str(b), "kind": kind, "weight": w}
              for a, b, kind, w in conn.execute("SELECT a, b, kind, weight FROM pub.connections")]
     # Pinned first, then oldest first: a stable order, so a theme keeps its color as others come and go.
@@ -31,6 +33,14 @@ def graph(conn) -> dict:
               for i, n, p, o, c in conn.execute("""SELECT theme_id, name, pinned, origin, n_ideas FROM pub.themes
                                                    ORDER BY pinned DESC, created_at, name""")]
     return {"nodes": nodes, "links": links, "themes": themes}
+
+
+def positions(conn) -> dict:
+    """Each idea's place on the semantic map (x, y in about [-1, 1]), once Idea Machine publishes them."""
+    try:
+        return {i: [x, y] for i, x, y in conn.execute("SELECT idea_id, x, y FROM pub.idea_positions")}
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        return {}
 
 
 def idea(conn, idea_id: str) -> dict | None:
@@ -41,14 +51,39 @@ def idea(conn, idea_id: str) -> dict | None:
     if row is None:
         return None
     title, statement, origin, ref, notes, themes, starred, claude_title, claude_statement, my_note, corrected = row
-    evidence = [{"kind": k, "said_by": who, "quote": q, "gist": g, "confidence": c,
-                 "said_at": at.isoformat(), "verdict": v, "relation": rel}
-                for k, who, q, g, c, at, v, rel in conn.execute(
-                    """SELECT kind, said_by, quote, gist, confidence, said_at, verdict, relation FROM pub.evidence
-                       WHERE idea_id = %s ORDER BY said_at""", (idea_id,))]
+    evidence = evidence_of(conn, idea_id).get(UUID(idea_id), [])
     return {"id": idea_id, "title": title, "statement": statement, "origin": origin, "ref": ref, "notes": notes,
             "themes": list(themes), "starred": starred, "evidence": evidence, "corrected": corrected,
             "claude_title": claude_title, "claude_statement": claude_statement, "my_note": my_note}
+
+
+def evidence_of(conn, idea_id: str | None = None) -> dict:
+    """Evidence by idea: one idea's, or every idea's."""
+    out: dict = {}
+    for i, item, k, who, q, g, c, at, v, rel in conn.execute(
+            """SELECT idea_id, item_id, kind, said_by, quote, gist, confidence, said_at, verdict, relation
+               FROM pub.evidence WHERE %(idea)s::uuid IS NULL OR idea_id = %(idea)s ORDER BY said_at""",
+            {"idea": idea_id}):
+        out.setdefault(i, []).append({"item_id": str(item), "kind": k, "said_by": who, "quote": q, "gist": g,
+                                      "confidence": c, "said_at": at.isoformat(), "verdict": v, "relation": rel})
+    return out
+
+
+def details(conn) -> dict:
+    """Every idea as the map's panel shows it, for the copy the app keeps on the device."""
+    evidence = evidence_of(conn)
+    return {str(i): {"id": str(i), "title": t, "statement": s, "origin": o, "ref": ref, "notes": notes,
+                     "themes": list(th), "starred": st, "evidence": evidence.get(i, []), "corrected": c,
+                     "claude_title": ct, "claude_statement": cs, "my_note": mine}
+            for i, t, s, o, ref, notes, th, st, ct, cs, mine, c in conn.execute(
+                """SELECT idea_id, title, statement, origin, archive_ref, notes, themes, starred, claude_title,
+                          claude_statement, my_note, corrected FROM pub.ideas""")}
+
+
+def snapshot(conn) -> dict:
+    """Everything the app shows, in one piece. The device replaces its copy with this on every sync, so what Idea
+    Machine forgets is gone from the phone too."""
+    return {"graph": graph(conn), "ideas": details(conn), "review": review(conn, limit=500), "status": status(conn)}
 
 
 def review(conn, limit: int = 50) -> dict:
@@ -75,7 +110,8 @@ def review(conn, limit: int = 50) -> dict:
 # What Lattice may say, and about what (ROADMAP §3.5). Everything else is refused before it reaches the database.
 EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_id",
           "star": "idea_id", "unstar": "idea_id", "idea_correct": "idea_id", "idea_note": "idea_id",
-          "pin_theme": "theme_id", "unpin_theme": "theme_id", "reject_theme": "theme_id"}
+          "pin_theme": "theme_id", "unpin_theme": "theme_id", "reject_theme": "theme_id",
+          "link": "idea_id", "unlink": "idea_id"}
 
 
 def record(conn, event: dict) -> int:
@@ -94,9 +130,14 @@ def record(conn, event: dict) -> int:
             raise ValueError("a correction needs a title or a statement")
     elif kind == "idea_note":   # context for the idea; empty clears it
         payload = {"note": str(event.get("note") or "").strip()[:1000]}
+    other = None
+    if kind in ("link", "unlink"):   # my links between two ideas, undirected
+        other = str(UUID(str(event.get("other_idea_id", ""))))
+        if other == ref:
+            raise ValueError("an idea can't link to itself")
     return conn.execute(
-        f"INSERT INTO pub.feedback_events (kind, {target}, payload) VALUES (%s, %s, %s) RETURNING event_id",
-        (kind, ref, json.dumps(payload))).fetchone()[0]
+        f"""INSERT INTO pub.feedback_events (kind, {target}, other_idea_id, payload) VALUES (%s, %s, %s, %s)
+            RETURNING event_id""", (kind, ref, other, json.dumps(payload))).fetchone()[0]
 
 
 def status(conn) -> dict:

@@ -16,7 +16,8 @@ HERE = resources.files("lattice")
 STATIC = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
           "/icon-192.png": ("icon-192.png", "image/png"),
           "/icon-512.png": ("icon-512.png", "image/png"),
-          "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png")}
+          "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+          "/sw.js": ("sw.js", "text/javascript")}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -89,7 +90,9 @@ class Handler(BaseHTTPRequestHandler):
             self._login_page()
             return
         if path == "/logout":
-            self._redirect("/login", auth.clear_cookie())
+            # Logging out wipes this device's copy of the lattice and any unsent feedback, not just the cookie.
+            self._send(200, HERE.joinpath("logout.html").read_bytes(), "text/html; charset=utf-8",
+                       {"Set-Cookie": auth.clear_cookie(), "Clear-Site-Data": '"cache", "storage"'})
             return
         if not auth.cookie_ok(self.headers.get("Cookie")):
             if path.startswith("/api/"):
@@ -100,13 +103,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with data.connect() as conn:
                 if path == "/":
-                    # "</" is escaped so no string in the data can close the script element.
-                    graph = json.dumps(data.graph(conn)).replace("</", "<\\/")
-                    review = json.dumps(data.review(conn)).replace("</", "<\\/")
-                    status = json.dumps(data.status(conn)).replace("</", "<\\/")
-                    page = (HERE.joinpath("index.html").read_text().replace("/*GRAPH*/null", graph, 1)
-                            .replace("/*REVIEW*/null", review, 1).replace("/*STATUS*/null", status, 1))
-                    self._send(200, page.encode(), "text/html; charset=utf-8")
+                    # The page carries no data: it renders the copy kept on the device and syncs it from
+                    # /api/snapshot, so the service worker can keep the page itself for offline use.
+                    self._send(200, HERE.joinpath("index.html").read_bytes(), "text/html; charset=utf-8")
+                elif path == "/api/snapshot":
+                    self._json(data.snapshot(conn))
                 elif path == "/api/graph":
                     self._json(data.graph(conn))
                 elif path == "/api/review":

@@ -123,6 +123,19 @@
   #runs .run { border-top: 1px solid var(--border); padding: 6px 0; font-size: 13px; }
   #runs .run:first-of-type { border-top: 0; }
   #runs .msg { color: var(--text-secondary); white-space: pre-wrap; }
+  .sync { font-size: 13px; color: var(--text-secondary); }
+  .sync:empty { display: none; }
+  body[data-view="review"] #newbtn { display: none; }
+  .newbtn[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
+  .tag { font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--text-secondary); }
+  #panel .conn { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; }
+  #panel .conn .linkbtn { text-align: left; }
+  #panel .conn .k { color: var(--text-muted); font-size: 12px; }
+  #panel .verdicts { display: flex; gap: 6px; margin-top: 4px; }
+  #panel .verdicts button { font-size: 12px; padding: 2px 8px; }
+  #linker { display: grid; gap: 4px; margin: 6px 0 10px; }
+  #linker input { width: 100%; }
+  #linker .linkbtn { text-align: left; padding: 3px 0; }
   .toast { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); background: var(--surface-3);
            border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; display: none; }
 
@@ -147,7 +160,9 @@
   <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas"
          style="display:none">
   <button class="status" id="status" aria-haspopup="true" aria-expanded="false"></button>
+  <span class="sync" id="sync" role="status"></span>
   <span class="counts map-only" id="counts"></span>
+  <button class="newbtn" id="newbtn" aria-pressed="false" hidden></button>
   <button id="legendbtn" aria-expanded="false">Legend</button>
   <div class="legend map-only" id="legend"></div>
 </header>
@@ -174,65 +189,185 @@ function toast(text) {
   clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", 2500);
 }
 
-async function api(path, body) {
-  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"},
-                                      body: JSON.stringify(body)} : {});
-  if (r.status === 401) { location.href = "/login"; throw new Error("logged out"); }
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.error || r.statusText);
-  return data;
+// --- The copy on this device -------------------------------------------------------------------------------
+// Local-first: the app renders a copy of pub kept in IndexedDB, so it opens and navigates without a network.
+// Feedback goes into a queue, applied to the copy at once and sent when the server can be reached. Every sync
+// replaces the copy whole, so whatever Idea Machine forgets is gone from the phone too.
+
+const idb = (() => {
+  let db;
+  const open = () => db ||= new Promise((ok, no) => {
+    const r = indexedDB.open("lattice", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+  });
+  const run = async (mode, f) => {
+    const t = (await open()).transaction("kv", mode), r = f(t.objectStore("kv"));
+    return new Promise((ok, no) => { t.oncomplete = () => ok(r.result); t.onerror = () => no(t.error); });
+  };
+  // Private windows and blocked storage: the app still works, it just keeps nothing between visits.
+  return {get: k => run("readonly", s => s.get(k)).catch(() => undefined),
+          set: (k, v) => run("readwrite", s => s.put(v, k)).catch(() => {})};
+})();
+
+let snap = null;     // the server's copy, as last synced (plus synced_at, this device's clock)
+let state = null;    // snap with my unsent events applied: what the app shows
+let pending = [];    // events the server hasn't accepted yet, oldest first
+const id = x => x?.id ?? x;   // d3 swaps a link's ends for the node objects
+const samePair = (l, a, b) => (id(l.source) === a && id(l.target) === b) || (id(l.source) === b && id(l.target) === a);
+
+// What an event does to the copy, mirroring what Idea Machine will make of it.
+function applyEvent(st, e) {
+  const node = st.graph.nodes.find(n => n.id === e.idea_id), idea = st.ideas[e.idea_id];
+  const verdict = {item_keep: "keep", item_star: "star", item_discard: "discard"}[e.kind];
+  if (e.kind === "star" || e.kind === "unstar") {
+    for (const x of [node, idea]) if (x) x.starred = e.kind === "star";
+  } else if (e.kind === "idea_correct") {   // an empty field goes back to Claude's wording
+    for (const f of ["title", "statement"]) if (f in e && idea) idea[f] = e[f] || idea[`claude_${f}`];
+    if (idea) idea.corrected = idea.title !== idea.claude_title || idea.statement !== idea.claude_statement;
+    if (node && idea) Object.assign(node, {title: idea.title, statement: idea.statement});
+  } else if (e.kind === "idea_note") {
+    if (idea) idea.my_note = e.note || null;
+  } else if (verdict) {
+    const was = st.review.items.length;
+    st.review.items = st.review.items.filter(i => i.id !== e.item_id);
+    if (st.review.items.length < was) st.review.total = Math.max(0, st.review.total - 1);
+    for (const d of Object.values(st.ideas)) for (const ev of d.evidence) if (ev.item_id === e.item_id) ev.verdict = verdict;
+  } else if (e.kind.endsWith("_theme")) {
+    const t = st.graph.themes.find(t => t.id === e.theme_id);
+    if (t) e.kind === "reject_theme" ? t.rejected = true : t.pinned = e.kind === "pin_theme";
+  } else if (e.kind === "link" || e.kind === "unlink") {
+    st.graph.links = st.graph.links.filter(l => !(l.kind === "mine" && samePair(l, e.idea_id, e.other_idea_id)));
+    if (e.kind === "link") st.graph.links.push({source: e.idea_id, target: e.other_idea_id, kind: "mine", weight: 1});
+  }
+  // The review card names the capture's idea; keep it in step with corrections.
+  for (const item of st.review.items) if (item.idea?.id === e.idea_id && idea)
+    Object.assign(item.idea, {title: idea.title, statement: idea.statement, note: idea.my_note});
 }
 
-// The one write: feedback events. Idea Machine applies them on its next run.
-const send = event => api("/api/feedback", event);
+function rebuild() {
+  state = structuredClone(snap);
+  pending.forEach(e => applyEvent(state, e));
+}
+
+// Every change I make: applied here at once, kept until the server has it.
+async function act(event) {
+  applyEvent(state, event);
+  pending.push(event);
+  await idb.set("pending", pending);
+  renderSync();
+  flush();
+}
+
+let flushing = false;
+async function flush() {
+  if (flushing) return;
+  flushing = true;
+  try {
+    while (pending.length) {
+      let r;
+      try {
+        r = await fetch("/api/feedback", {method: "POST", headers: {"Content-Type": "application/json"},
+                                          body: JSON.stringify(pending[0])});
+      } catch { break; }                                   // offline: try again later
+      if (r.status === 401) { location.href = "/login"; break; }   // the queue survives logging in again
+      if (r.status >= 500) break;
+      if (!r.ok) {                                         // refused: it never will be accepted, so drop it
+        toast(`Not saved: ${(await r.json().catch(() => ({}))).error || r.statusText}`);
+        pending.shift(); await idb.set("pending", pending); rebuild(); renderAll(); continue;
+      }
+      pending.shift();
+      await idb.set("pending", pending);
+    }
+  } finally { flushing = false; renderSync(); }
+}
+
+let syncing = false;
+async function sync() {
+  if (syncing) return;
+  syncing = true;
+  try {
+    await flush();
+    const r = await fetch("/api/snapshot").catch(() => null);
+    if (r?.status === 401) { location.href = "/login"; return; }
+    if (!r?.ok) return;
+    snap = {...await r.json(), synced_at: Date.now()};
+    await idb.set("snapshot", snap);
+    rebuild();
+    renderAll();
+  } finally { syncing = false; renderSync(); }
+}
+
+function renderSync() {
+  const el = document.getElementById("sync");
+  const offline = !navigator.onLine || (snap && Date.now() - snap.synced_at > 15 * 60e3);
+  const parts = [];
+  if (offline && snap) parts.push(`Offline · copy from ${when(new Date(snap.synced_at).toISOString())}`);
+  if (pending.length) parts.push(`${pending.length} to send`);
+  el.textContent = parts.join(" · ");
+}
+
+// --- New since my last visit -------------------------------------------------------------------------------
+// A visit ends when the app has been away for half an hour; ideas Idea Machine made after that are new.
+
+const AWAY = 30 * 60e3;
+if (!store.get("seen")) store.set("seen", Date.now());
+let seen = Number(store.get("seen"));
+let onlyNew = false;
+function arrived() {
+  const left = Number(store.get("left")) || 0;
+  if (left && Date.now() - left > AWAY && left > seen) { seen = left; store.set("seen", seen); }
+}
+arrived();
+const isNew = n => Date.parse(n.created_at) > seen;
+
+document.getElementById("newbtn").addEventListener("click", e => {
+  onlyNew = !onlyNew;
+  e.currentTarget.setAttribute("aria-pressed", onlyNew);
+  filter();
+});
 
 // --- Run status ------------------------------------------------------------------------------------------
 // Is the unattended hourly run healthy? Worst problem first; the run list says more.
 
 const hhmm = iso => new Date(iso).toLocaleTimeString(undefined, {hour: "numeric", minute: "2-digit"});
 const money = x => `$${x.toFixed(2)}`;
-let statusData = /*STATUS*/null;
 
 function judge({now, spent, runs}) {
   const last = runs[0];
   const cap = runs.find(r => r.cap)?.cap;
   const spend = cap ? `${money(spent)} of ${money(cap)}` : money(spent);
-  if (!last) return ["warning", "\u26a0", "No runs recorded yet"];
+  if (!last) return ["warning", "⚠", "No runs recorded yet"];
   const age = (new Date(now) - new Date(last.started_at)) / 3.6e6;   // hours
-  if (last.error) return ["critical", "\u2715", `Last run failed (${hhmm(last.started_at)}): ${last.error}`];
-  if (!last.finished_at && age > 1) return ["critical", "\u2715", `Last run didn't finish (${hhmm(last.started_at)})`];
-  if (age > 2) return ["warning", "\u26a0", `No run since ${hhmm(last.started_at)}`];
-  if (last.warnings.length) return ["warning", "\u26a0", `${hhmm(last.started_at)}: ${last.warnings[0]}`];
-  if (cap && spent >= 0.8 * cap) return ["warning", "\u26a0", `${spend} this month`];
+  if (last.error) return ["critical", "✕", `Last run failed (${hhmm(last.started_at)}): ${last.error}`];
+  if (!last.finished_at && age > 1) return ["critical", "✕", `Last run didn't finish (${hhmm(last.started_at)})`];
+  if (age > 2) return ["warning", "⚠", `No run since ${hhmm(last.started_at)}`];
+  if (last.warnings.length) return ["warning", "⚠", `${hhmm(last.started_at)}: ${last.warnings[0]}`];
+  if (cap && spent >= 0.8 * cap) return ["warning", "⚠", `${spend} this month`];
   const news = last.captured ? `${last.captured} new` : "nothing new";
-  return ["good", "\u2713", `${hhmm(last.started_at)} \u00b7 ${news} \u00b7 ${spend}`];
+  return ["good", "✓", `${hhmm(last.started_at)} · ${news} · ${spend}`];
 }
 
 function renderStatus() {
-  if (!statusData) return;
-  const [level, icon, text] = judge(statusData);
+  // The server's clock at the sync, moved on by the time since: an old copy shows its age, not a healthy run.
+  const s = {...state.status, now: new Date(Date.parse(state.status.now) + Date.now() - snap.synced_at).toISOString()};
+  const [level, icon, text] = judge(s);
   const el = document.getElementById("status");
   el.dataset.level = level;
   el.innerHTML = `<span class="ico" aria-hidden="true">${icon}</span><span>${esc(text)}</span>`;
   el.setAttribute("aria-label", `Run status: ${level === "good" ? "OK" : level}. ${text}`);
-  document.getElementById("runs").innerHTML = `<b>Recent runs</b> <span class="muted">\u00b7 ${money(statusData.spent)} this month</span>` +
-    statusData.runs.map(r => `<div class="run"><div>${r.error ? "\u2715" : r.warnings.length ? "\u26a0" : "\u2713"}
-        ${when(r.started_at)} \u00b7 ${r.captured} captured \u00b7 ${r.read} read \u00b7 ${money(r.cost)}</div>
+  document.getElementById("runs").innerHTML = `<b>Recent runs</b> <span class="muted">· ${money(s.spent)} this month</span>` +
+    s.runs.map(r => `<div class="run"><div>${r.error ? "✕" : r.warnings.length ? "⚠" : "✓"}
+        ${when(r.started_at)} · ${r.captured} captured · ${r.read} read · ${money(r.cost)}</div>
         ${r.error ? `<div class="msg">${esc(r.error)}</div>` : ""}
-        ${r.warnings.map(w => `<div class="msg">${esc(w)}</div>`).join("")}</div>`).join("");
-}
-
-async function refreshStatus() {
-  try { statusData = await api("/api/status"); renderStatus(); } catch {}
+        ${r.warnings.map(w => `<div class="msg">${esc(w)}</div>`).join("")}</div>`).join("") +
+    `<p class="muted"><a href="/logout">Log out</a> (also clears the copy on this device)</p>`;
 }
 
 document.getElementById("status").addEventListener("click", e => {
   const open = document.getElementById("runs").classList.toggle("open");
   e.currentTarget.setAttribute("aria-expanded", open);
 });
-// Coming back to the app (it stays open on a phone): fetch a fresh status.
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshStatus(); });
-statusData ? renderStatus() : refreshStatus();
 
 // --- Tabs --------------------------------------------------------------------------------------------------
 
@@ -243,32 +378,28 @@ function setTab(tab) {
   document.getElementById("search").style.display = tab === "review" ? "none" : "";
   store.set("tab", tab);
   if (tab === "map") drawMap();
-  if (tab === "review") loadReview();
 }
 document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
 // --- Review ------------------------------------------------------------------------------------------------
 
 const REASONS = ["no context", "not my interests", "garbled", "already have it", "too obvious"];
-let queue = [], waiting = 0;
-// The first batch comes embedded in the page, like the graph; later batches from the API.
-let embeddedReview = /*REVIEW*/null;
+let cardId;   // the capture on screen; a sync redraws the card only when it changes
 
-async function loadReview() {
-  try {
-    const d = embeddedReview || await api("/api/review");
-    embeddedReview = null;
-    queue = d.items; waiting = d.total;
-    renderCard();
-  } catch (e) { toast(e.message); }
+function renderReview() {
+  const {items, total} = state.review;
+  document.getElementById("badge").textContent = total ? `· ${total}` : "";
+  if (items[0]?.id !== cardId || !items.length) renderCard();
 }
 
 function renderCard() {
-  document.getElementById("badge").textContent = waiting ? `· ${waiting}` : "";
   const box = document.getElementById("review");
-  const item = queue[0];
+  const item = state.review.items[0];
+  cardId = item?.id;
+  document.getElementById("badge").textContent = state.review.total ? `· ${state.review.total}` : "";
   if (!item) {
-    box.innerHTML = `<div class="done"><p>Nothing waiting. New captures arrive with each hourly run.</p></div>`;
+    box.innerHTML = `<div class="done"><p>${state.review.total ? "That's all this device holds; more on the next sync."
+                                          : "Nothing waiting. New captures arrive with each hourly run."}</p></div>`;
     return;
   }
   box.innerHTML = `<article class="card">
@@ -322,11 +453,10 @@ function renderCard() {
     why.focus();
   });
   document.getElementById("fix")?.addEventListener("click", () =>
-    editor(document.getElementById("cardedit"), item.idea, saved => {
-      item.idea = {...item.idea, ...saved};
-      renderCard();
-    }));
+    editor(document.getElementById("cardedit"), item.idea, renderCard));
 }
+
+const saved = () => toast(navigator.onLine ? "Saved" : "Saved on this device; sends when online");
 
 // Correct an idea or give it context. Corrections are read straight from the events, so they show at once.
 function editor(host, idea, onSaved) {
@@ -344,27 +474,25 @@ function editor(host, idea, onSaved) {
     const fix = {};
     if (title !== idea.title) fix.title = title;
     if (statement !== idea.statement) fix.statement = statement;
-    try {
-      if (Object.keys(fix).length) await send({kind: "idea_correct", idea_id: idea.id, ...fix});
-      if (note !== (idea.note || "")) await send({kind: "idea_note", idea_id: idea.id, note});
-      toast("Saved");
-      onSaved({title: title || idea.title, statement: statement || idea.statement, note});
-    } catch (e) { toast(`Didn't save: ${e.message}`); }
+    if (Object.keys(fix).length) await act({kind: "idea_correct", idea_id: idea.id, ...fix});
+    if (note !== (idea.note || "")) await act({kind: "idea_note", idea_id: idea.id, note});
+    saved();
+    if (fix.title) redrawMap();   // labels and tooltips
+    renderList();
+    onSaved();
   });
 }
 
 async function decide(kind, note) {
-  const item = queue[0];
-  try {
-    await send({kind, item_id: item.id, note: note || undefined});
-    queue.shift(); waiting = Math.max(0, waiting - 1);
-    toast({item_keep: "Kept", item_star: "Starred", item_discard: "Discarded"}[kind]);
-    if (!queue.length && waiting) loadReview(); else renderCard();
-  } catch (e) { toast(`Didn't save: ${e.message}`); }
+  const item = state.review.items[0];
+  if (!item) return;
+  await act({kind, item_id: item.id, note: note || undefined});
+  toast({item_keep: "Kept", item_star: "Starred", item_discard: "Discarded"}[kind]);
+  renderCard();
 }
 
 document.addEventListener("keydown", e => {   // on a keyboard: k keep, * star, d discard
-  if (document.body.dataset.view !== "review" || e.target.tagName === "INPUT" || !queue.length) return;
+  if (document.body.dataset.view !== "review" || e.target.tagName === "INPUT" || !state?.review.items.length) return;
   if (e.key === "k") decide("item_keep");
   else if (e.key === "*") decide("item_star");
   else if (e.key === "d") document.getElementById("discard")?.click();
@@ -372,29 +500,54 @@ document.addEventListener("keydown", e => {   // on a keyboard: k keep, * star, 
 
 // --- Map and list ------------------------------------------------------------------------------------------
 
-// The server embeds the graph in the page (no second round trip); fall back to the API if it didn't.
-const embedded = /*GRAPH*/null;
-let graphData = null, drawn = false;
-const graphReady = embedded ? Promise.resolve(embedded) : api("/api/graph");
-graphReady.then(g => { graphData = g; renderList(g.nodes); document.getElementById("counts").textContent =
-  `${g.nodes.length} ideas · ${g.links.length} connections`; if (document.body.dataset.view === "map") drawMap(); });
+const query = () => document.getElementById("search").value.trim().toLowerCase();
+const hit = n => (!onlyNew || isNew(n)) && (!query() || (n.title + " " + n.statement).toLowerCase().includes(query()));
 
-function renderList(rows) {
+function renderCounts() {
+  const {nodes, links} = state.graph;
+  const fresh = nodes.filter(isNew).length;
+  document.getElementById("counts").textContent = `${nodes.length} ideas · ${links.length} connections`;
+  const b = document.getElementById("newbtn");
+  b.hidden = !fresh && !onlyNew;
+  b.textContent = `${fresh} new since your last visit`;
+}
+
+function renderList() {
   const list = document.getElementById("list");
+  const rows = state.graph.nodes.filter(hit);
   list.innerHTML = `<table><thead><tr><th>Idea</th><th>From</th><th>Themes</th><th>Evidence</th><th>Last said</th></tr></thead><tbody>` +
-    [...rows].sort((a, b) => (b.last_said || "").localeCompare(a.last_said || "")).map(n =>
-      `<tr class="row" data-id="${n.id}"><td>${n.starred ? "★ " : ""}${esc(n.title)}</td>` +
+    rows.sort((a, b) => isNew(b) - isNew(a) || (b.last_said || "").localeCompare(a.last_said || "")).map(n =>
+      `<tr class="row" data-id="${n.id}"><td>${n.starred ? "★ " : ""}${esc(n.title)}${isNew(n) ? ' <span class="tag">new</span>' : ""}</td>` +
       `<td>${n.origin === "archive" ? esc(n.ref) : "captured"}</td>` +
       `<td>${esc(n.themes.join(", "))}</td><td>${n.evidence}</td><td>${day(n.last_said)}</td></tr>`).join("") +
     `</tbody></table>`;
   list.querySelectorAll("tr.row").forEach(tr => tr.addEventListener("click", () => { setTab("map"); show(tr.dataset.id); }));
 }
 
-let mapNodes = null;
+function filter() {
+  if (mapNodes) mapNodes.attr("opacity", n => hit(n) ? 1 : 0.15);
+  renderList();
+}
+document.getElementById("search").addEventListener("input", filter);
+
+// Size is the idea's weight: its evidence, and a star counts as two more pieces.
+const weight = n => n.evidence + (n.starred ? 2 : 0);
+const radius = n => 5 + 3 * Math.sqrt(weight(n));
+
+let mapNodes = null, drawn = false, shown = null;
+const placed = new Map();   // where each idea was last drawn, so a redraw doesn't scatter the map
+let view = null;            // the zoom, kept across redraws
+
+function redrawMap() {
+  drawn = false;
+  document.getElementById("graph").replaceChildren();
+  if (document.body.dataset.view === "map") drawMap();
+}
+
 function drawMap() {
-  if (drawn || !graphData) return;
+  if (drawn || !state) return;
   drawn = true;
-  const {nodes, links, themes} = graphData;
+  const {nodes, links, themes} = state.graph;
   // Themes take the 8 categorical slots in the server's stable order (pinned first, then oldest), so a theme
   // keeps its color as the lattice grows. Themes past the eighth share the neutral "other" color.
   const order = themes.map(t => t.name);
@@ -406,31 +559,39 @@ function drawMap() {
     themes.slice(0, MAX).map(t => `<span><i class="sw" style="background:${slot(t.name)}"></i>${esc(t.name)}` +
       `${t.proposed && !t.pinned ? " <em>(proposed)</em>" : ""} · ${t.ideas}</span>`).join("") +
     `<span><i class="sw" style="background:var(--unthemed)"></i>${themes.length > MAX ? "Other or no theme" : "No theme"}</span>` +
+    `<span><i class="sw" style="border:1.5px dashed var(--text-primary)"></i>new since your last visit</span>` +
     `<span><i class="ln"></i>evolves</span><span><i class="ln" style="border-top-style:dashed"></i>archive link</span>` +
-    `<span><i class="ln" style="border-top-width:1px;border-color:var(--edge)"></i>related</span>`;
-  renderThemes(themes);
+    `<span><i class="ln" style="border-top-width:1px;border-color:var(--edge)"></i>related</span>` +
+    `<span><i class="ln" style="border-color:var(--text-primary);border-top-style:dotted"></i>your link</span>`;
+  if (!shown) renderThemes();
 
   const degree = Object.fromEntries(nodes.map(n => [n.id, 0]));
-  links.forEach(l => { degree[l.source]++; degree[l.target]++; });
+  links.forEach(l => { degree[id(l.source)]++; degree[id(l.target)]++; });
   const labelled = new Set([...nodes].sort((a, b) => degree[b.id] - degree[a.id]).slice(0, 12).map(n => n.id));
-  const radius = n => 5 + 3 * Math.sqrt(n.evidence);
+  // Starred ideas are always named, and new ones too while there are few enough to read.
+  const fresh = nodes.filter(isNew);
+  nodes.forEach(n => { if (n.starred || (fresh.length <= 12 && isNew(n))) labelled.add(n.id); });
 
   const box = document.getElementById("graph");
   const W = box.clientWidth, H = box.clientHeight;
   const svg = d3.select(box).append("svg").attr("width", W).attr("height", H)
-    .attr("role", "img").attr("aria-label", "Network of ideas and their connections");
+    .attr("role", "img").attr("aria-label", "Map of ideas and their connections");
   svg.append("defs").append("marker").attr("id", "arrow").attr("viewBox", "0 0 10 10").attr("refX", 16)
     .attr("refY", 5).attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
     .append("path").attr("d", "M0,0L10,5L0,10z").attr("fill", css("--edge-strong"));
   const g = svg.append("g");
-  const zoom = d3.zoom().scaleExtent([0.2, 4]).on("zoom", e => g.attr("transform", e.transform));
+  const zoom = d3.zoom().scaleExtent([0.2, 4]).on("zoom", e => { view = e.transform; g.attr("transform", e.transform); });
   svg.call(zoom);
 
   const edge = g.append("g").selectAll("line").data(links).join("line")
-    .attr("stroke", l => l.kind === "related" ? css("--edge") : css("--edge-strong"))
+    .attr("stroke", l => l.kind === "related" ? css("--edge") : l.kind === "mine" ? css("--text-primary") : css("--edge-strong"))
     .attr("stroke-width", l => l.kind === "related" ? 1 : 2)
-    .attr("stroke-dasharray", l => l.kind === "archive" ? "4 3" : null)
+    .attr("stroke-dasharray", l => l.kind === "archive" ? "4 3" : l.kind === "mine" ? "1 3" : null)
+    .attr("stroke-linecap", l => l.kind === "mine" ? "round" : null)
     .attr("marker-end", l => l.kind === "evolves" ? "url(#arrow)" : null);
+  const ring = g.append("g").selectAll("circle").data(fresh).join("circle")
+    .attr("r", n => radius(n) + 4).attr("fill", "none").style("stroke", "var(--text-primary)")
+    .attr("stroke-width", 1.5).attr("stroke-dasharray", "3 2");
   const node = g.append("g").selectAll("circle").data(nodes).join("circle")
     .attr("r", radius)
     .style("fill", n => n.origin === "archive" ? "var(--surface-1)" : color(n))
@@ -439,7 +600,7 @@ function drawMap() {
     .style("cursor", "pointer")
     .on("mousemove", (e, n) => { const t = document.getElementById("tip");
       t.style.display = "block"; t.style.left = e.clientX + 12 + "px"; t.style.top = e.clientY + 12 + "px";
-      t.textContent = `${n.starred ? "★ " : ""}${n.title}${n.evidence ? ` · ${n.evidence} piece${n.evidence > 1 ? "s" : ""} of evidence` : ""}`; })
+      t.textContent = `${n.starred ? "★ " : ""}${n.title}${n.evidence ? ` · ${n.evidence} piece${n.evidence > 1 ? "s" : ""} of evidence` : ""}${isNew(n) ? " · new" : ""}`; })
     .on("mouseleave", () => { document.getElementById("tip").style.display = "none"; })
     .on("click", (e, n) => show(n.id))
     .call(d3.drag()
@@ -447,35 +608,57 @@ function drawMap() {
       .on("drag", (e, n) => { n.fx = e.x; n.fy = e.y; })
       .on("end", (e, n) => { if (!e.active) sim.alphaTarget(0); n.fx = null; n.fy = null; }));
   const label = g.append("g").selectAll("text").data(nodes.filter(n => labelled.has(n.id))).join("text")
-    .text(n => n.title).attr("dx", 10).attr("dy", 4);
+    .text(n => `${n.starred ? "★ " : ""}${n.title}`).attr("dx", 10).attr("dy", 4);
 
-  // Each theme gets an anchor on a ring and pulls its ideas toward it, so themes read as regions.
-  // Unthemed ideas drift to the middle.
-  const R = Math.min(W, H) * 0.36;
-  const anchor = Object.fromEntries(order.map((name, i) =>
-    [name, [W / 2 + R * Math.cos(2 * Math.PI * i / order.length - Math.PI / 2),
-            H / 2 + R * Math.sin(2 * Math.PI * i / order.length - Math.PI / 2)]]));
-  const home = n => { const t = order.find(name => n.themes.includes(name)); return t ? anchor[t] : [W / 2, H / 2]; };
+  // Where each idea wants to be. With Idea Machine's semantic positions (pub.idea_positions), ideas sit by
+  // meaning and themes show as the colors that gather; an idea without one goes to the middle of its theme's
+  // placed ideas. Without positions, each theme gets an anchor on a ring and pulls its ideas toward it.
+  const R = Math.min(W, H) * 0.42, Rx = W * 0.42, Ry = H * 0.42;   // semantic positions fill the box
+  const semantic = nodes.filter(n => n.pos).length >= nodes.length / 2;
+  let home;
+  if (semantic) {
+    const centre = {};
+    for (const name of order) {
+      const ps = nodes.filter(n => n.pos && n.themes.includes(name)).map(n => n.pos);
+      if (ps.length) centre[name] = [d3.mean(ps, p => p[0]), d3.mean(ps, p => p[1])];
+    }
+    home = n => { const p = n.pos || centre[order.find(name => centre[name] && n.themes.includes(name))] || [0, 0];
+                  return [W / 2 + Rx * p[0], H / 2 + Ry * p[1]]; };
+  } else {
+    const anchor = Object.fromEntries(order.map((name, i) =>
+      [name, [W / 2 + R * 0.85 * Math.cos(2 * Math.PI * i / order.length - Math.PI / 2),
+              H / 2 + R * 0.85 * Math.sin(2 * Math.PI * i / order.length - Math.PI / 2)]]));
+    home = n => { const t = order.find(name => n.themes.includes(name)); return t ? anchor[t] : [W / 2, H / 2]; };
+  }
+  nodes.forEach(n => { [n.x, n.y] = placed.get(n.id) || home(n); });
+  const pull = semantic ? 0.3 : 0.12;
   const sim = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id(n => n.id).distance(l => l.kind === "related" ? 70 : 50).strength(0.3))
-    .force("charge", d3.forceManyBody().strength(-45))
-    .force("x", d3.forceX(n => home(n)[0]).strength(0.12)).force("y", d3.forceY(n => home(n)[1]).strength(0.12))
+    .force("link", d3.forceLink(links).id(n => n.id).distance(l => l.kind === "related" ? 70 : 50)
+      .strength(semantic ? 0.05 : 0.3))
+    .force("charge", d3.forceManyBody().strength(semantic ? -20 : -45))
+    .force("x", d3.forceX(n => home(n)[0]).strength(pull)).force("y", d3.forceY(n => home(n)[1]).strength(pull))
     .force("collide", d3.forceCollide(n => radius(n) + 2))
     .stop();
   const place = () => {
     edge.attr("x1", l => l.source.x).attr("y1", l => l.source.y).attr("x2", l => l.target.x).attr("y2", l => l.target.y);
     node.attr("cx", n => n.x).attr("cy", n => n.y);
+    ring.attr("cx", n => n.x).attr("cy", n => n.y);
     label.attr("x", n => n.x).attr("y", n => n.y);
+    nodes.forEach(n => placed.set(n.id, [n.x, n.y]));
   };
   sim.tick(300);   // settle before the first paint, so the map doesn't jiggle into place
   place();
-  // Start zoomed to fit every idea: on a phone the layout is wider than the screen.
-  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y), pad = 24;
-  const [x0, x1, y0, y1] = [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...ys) - pad, Math.max(...ys) + pad];
-  const k = Math.min(1.2, W / (x1 - x0), H / (y1 - y0));
-  svg.call(zoom.transform, d3.zoomIdentity.translate(W / 2 - k * (x0 + x1) / 2, H / 2 - k * (y0 + y1) / 2).scale(k));
+  if (view) svg.call(zoom.transform, view);
+  else {
+    // Start zoomed to fit every idea: on a phone the layout is wider than the screen.
+    const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y), pad = 24;
+    const [x0, x1, y0, y1] = [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...ys) - pad, Math.max(...ys) + pad];
+    const k = Math.min(1.2, W / (x1 - x0), H / (y1 - y0));
+    svg.call(zoom.transform, d3.zoomIdentity.translate(W / 2 - k * (x0 + x1) / 2, H / 2 - k * (y0 + y1) / 2).scale(k));
+  }
   sim.on("tick", place);   // dragging restarts it
   mapNodes = node;
+  filter();
 }
 
 document.getElementById("legendbtn").addEventListener("click", e => {
@@ -483,69 +666,139 @@ document.getElementById("legendbtn").addEventListener("click", e => {
   e.target.setAttribute("aria-expanded", open);
 });
 
-document.getElementById("search").addEventListener("input", e => {
-  if (!graphData) return;
-  const q = e.target.value.trim().toLowerCase();
-  const hit = n => !q || (n.title + " " + n.statement).toLowerCase().includes(q);
-  if (mapNodes) mapNodes.attr("opacity", n => hit(n) ? 1 : 0.15);
-  renderList(graphData.nodes.filter(hit));
-});
-
 // The panel with nothing selected: themes, with Pin / Reject for the proposals.
-function renderThemes(themes) {
+function renderThemes() {
+  shown = null;
   document.getElementById("panel").innerHTML =
-    `<p class="hint">Click an idea to see its evidence. Outlined circles come from the archive; filled ones were
-     captured from conversation. Size grows with evidence.</p><h2>Themes</h2>` +
-    themes.map(t => `<div class="theme-row" data-id="${t.id}"><span class="name">${esc(t.name)}
-        <span class="muted">· ${t.ideas}${t.pinned ? "" : t.proposed ? " · proposed" : ""}</span></span>` +
-      (t.proposed && !t.pinned ? `<button data-act="pin_theme">Pin</button><button data-act="reject_theme">Reject</button>` : "") +
+    `<p class="hint">Tap an idea to see its evidence. Outlined circles come from the archive; filled ones were
+     captured from conversation. Size grows with evidence and a star; a dashed ring marks what's new since your
+     last visit.</p><h2>Themes</h2>` +
+    state.graph.themes.map(t => `<div class="theme-row" data-id="${t.id}"><span class="name">${esc(t.name)}
+        <span class="muted">· ${t.ideas}${t.rejected ? " · rejected (next run)" : t.pinned ? (t.proposed ? " · pinned" : "")
+          : t.proposed ? " · proposed" : ""}</span></span>` +
+      (t.proposed && !t.pinned && !t.rejected ? `<button data-act="pin_theme">Pin</button><button data-act="reject_theme">Reject</button>` : "") +
       `</div>`).join("");
   document.querySelectorAll(".theme-row button").forEach(b => b.addEventListener("click", async () => {
-    const row = b.closest(".theme-row");
-    try {
-      await send({kind: b.dataset.act, theme_id: row.dataset.id});
-      row.querySelectorAll("button").forEach(x => x.remove());
-      row.querySelector(".muted").textContent += b.dataset.act === "pin_theme" ? " · pinned (next run)" : " · rejected (next run)";
-    } catch (e) { toast(`Didn't save: ${e.message}`); }
+    await act({kind: b.dataset.act, theme_id: b.closest(".theme-row").dataset.id});
+    renderThemes();
   }));
 }
 
-async function show(id) {
-  try {
-    const d = await api(`/api/idea/${id}`);
-    const node = graphData?.nodes.find(n => n.id === id);
-    const verdict = {keep: "kept", star: "★", discard: "discarded"};
-    document.getElementById("panel").innerHTML =
-      `<p><button id="back">← Themes</button> <button id="staridea">${d.starred ? "★ Starred" : "☆ Star"}</button>` +
-      ` <button id="editidea">Edit</button></p><div id="paneledit"></div>` +
-      `<h2>${esc(d.title)}</h2><p class="statement">${esc(d.statement)}</p>` +
-      (d.my_note ? `<p class="notes">Your note: ${esc(d.my_note)}</p>` : "") +
-      (d.corrected ? `<p class="meta">${d.origin === "archive" ? "Originally" : "Claude heard"}: ` +
-        `<i>${esc(d.claude_title)}</i> — ${esc(d.claude_statement)}</p>` : "") +
-      `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : "Captured from conversation"}` +
-      `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
-      (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
-      d.evidence.map(ev => `<div class="ev"><q>${esc(ev.quote)}</q>` +
-        `<div class="by">${esc(ev.said_by)} · ${day(ev.said_at)} · ${esc(ev.kind)}` +
-        `${ev.verdict ? ` · ${verdict[ev.verdict] || ev.verdict}` : ""}</div></div>`).join("");
-    document.getElementById("back").addEventListener("click", () => renderThemes(graphData.themes));
-    document.getElementById("editidea").addEventListener("click", () =>
-      editor(document.getElementById("paneledit"), {id, title: d.title, statement: d.statement, note: d.my_note},
-             saved => { if (node) Object.assign(node, saved); show(id); }));
-    document.getElementById("staridea").addEventListener("click", async () => {
-      try {
-        await send({kind: d.starred ? "unstar" : "star", idea_id: id});
-        d.starred = !d.starred;
-        if (node) node.starred = d.starred;
-        document.getElementById("staridea").textContent = d.starred ? "★ Starred" : "☆ Star";
-      } catch (e) { toast(`Didn't save: ${e.message}`); }
-    });
-  } catch (e) { toast(e.message); }
+function show(ideaId) {
+  const d = state.ideas[ideaId];
+  if (!d) { renderThemes(); return; }
+  shown = ideaId;
+  const title = nid => state.ideas[nid]?.title ?? "(an idea no longer in the lattice)";
+  const kinds = {evolves: "evolves", archive: "archive link", related: "related", mine: "your link"};
+  const conns = state.graph.links.filter(l => id(l.source) === ideaId || id(l.target) === ideaId)
+    .map(l => ({other: id(l.source) === ideaId ? id(l.target) : id(l.source), kind: l.kind}));
+  const verdictWord = {keep: "kept", star: "★", discard: "discarded"};
+  document.getElementById("panel").innerHTML =
+    `<p><button id="back">← Themes</button> <button id="staridea">${d.starred ? "★ Starred" : "☆ Star"}</button>` +
+    ` <button id="editidea">Edit</button> <button id="linkidea">Link to…</button></p>` +
+    `<div id="paneledit"></div><div id="linker" hidden></div>` +
+    `<h2>${esc(d.title)}</h2><p class="statement">${esc(d.statement)}</p>` +
+    (d.my_note ? `<p class="notes">Your note: ${esc(d.my_note)}</p>` : "") +
+    (d.corrected ? `<p class="meta">${d.origin === "archive" ? "Originally" : "Claude heard"}: ` +
+      `<i>${esc(d.claude_title)}</i> — ${esc(d.claude_statement)}</p>` : "") +
+    `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : "Captured from conversation"}` +
+    `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
+    (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
+    (conns.length ? `<div class="ev"><b>Connected to</b>${conns.map(c => `<div class="conn">
+        <button class="linkbtn" data-go="${c.other}">${esc(title(c.other))}</button>
+        <span class="k">${kinds[c.kind] || esc(c.kind)}</span>
+        ${c.kind === "mine" ? `<button class="linkbtn" data-unlink="${c.other}">Unlink</button>` : ""}</div>`).join("")}</div>` : "") +
+    d.evidence.map(ev => `<div class="ev"><q>${esc(ev.quote)}</q>` +
+      `<div class="by">${esc(ev.said_by)} · ${day(ev.said_at)} · ${esc(ev.kind)}` +
+      `${ev.verdict ? ` · ${verdictWord[ev.verdict] || ev.verdict}` : ""}</div>` +
+      (ev.verdict ? "" : `<div class="verdicts" data-item="${ev.item_id}"><button data-v="item_keep">Keep</button>` +
+        `<button data-v="item_star">★ Star</button><button data-v="item_discard">Discard</button></div>`) +
+      `</div>`).join("");
+  const panel = document.getElementById("panel");
+  panel.querySelector("#back").addEventListener("click", renderThemes);
+  panel.querySelector("#editidea").addEventListener("click", () =>
+    editor(panel.querySelector("#paneledit"), {id: ideaId, title: d.title, statement: d.statement, note: d.my_note},
+           () => show(ideaId)));
+  panel.querySelector("#staridea").addEventListener("click", async () => {
+    await act({kind: d.starred ? "unstar" : "star", idea_id: ideaId});
+    redrawMap(); renderList(); show(ideaId);
+  });
+  panel.querySelector("#linkidea").addEventListener("click", () => linker(ideaId));
+  panel.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go)));
+  panel.querySelectorAll("[data-unlink]").forEach(b => b.addEventListener("click", async () => {
+    await act({kind: "unlink", idea_id: ideaId, other_idea_id: b.dataset.unlink});
+    saved(); redrawMap(); renderCounts(); show(ideaId);
+  }));
+  // A verdict on a capture, in place: the same events as the Review tab.
+  panel.querySelectorAll(".verdicts button").forEach(b => b.addEventListener("click", async () => {
+    await act({kind: b.dataset.v, item_id: b.parentElement.dataset.item});
+    renderReview(); show(ideaId);
+  }));
 }
+
+// Link this idea to another: type to find it, tap to link.
+function linker(ideaId) {
+  const box = document.getElementById("linker");
+  box.hidden = false;
+  box.innerHTML = `<input id="linkq" type="search" placeholder="Find the idea to link to" aria-label="Find an idea to link to">
+                   <div id="linkhits"></div>`;
+  const q = box.querySelector("#linkq");
+  const list = () => {
+    const s = q.value.trim().toLowerCase();
+    const linked = new Set(state.graph.links.filter(l => l.kind === "mine" &&
+      (id(l.source) === ideaId || id(l.target) === ideaId)).map(l => id(l.source) === ideaId ? id(l.target) : id(l.source)));
+    const hits = s ? state.graph.nodes.filter(n => n.id !== ideaId && !linked.has(n.id) &&
+                                               (n.title + " " + n.statement).toLowerCase().includes(s)).slice(0, 8) : [];
+    box.querySelector("#linkhits").innerHTML = hits.map(n =>
+      `<button class="linkbtn" data-to="${n.id}">${esc(n.title)}</button>`).join("") ||
+      (s ? `<span class="muted">No idea matches.</span>` : "");
+    box.querySelectorAll("[data-to]").forEach(b => b.addEventListener("click", async () => {
+      await act({kind: "link", idea_id: ideaId, other_idea_id: b.dataset.to});
+      saved(); redrawMap(); renderCounts(); show(ideaId);
+    }));
+  };
+  q.addEventListener("input", list);
+  q.focus();
+}
+
+function renderAll() {
+  renderStatus();
+  renderReview();
+  renderCounts();
+  renderList();
+  redrawMap();
+  if (shown) show(shown); else renderThemes();
+  renderSync();
+}
+
+// --- Start -------------------------------------------------------------------------------------------------
 
 // #review, #map or #list opens that tab (bookmarkable); otherwise the last one used.
 const fromHash = location.hash.slice(1);
-setTab(["review", "map", "list"].includes(fromHash) ? fromHash : store.get("tab") || "review");
+const firstTab = ["review", "map", "list"].includes(fromHash) ? fromHash : store.get("tab") || "review";
+
+(async () => {
+  [snap, pending] = [await idb.get("snapshot"), (await idb.get("pending")) || []];
+  if (snap) { rebuild(); renderAll(); }   // the copy on the device first, at once
+  setTab(firstTab);
+  await sync();
+  if (!snap) document.getElementById("review").innerHTML =
+    `<div class="done"><p>Can't reach Lattice, and there's no copy on this device yet.</p></div>`;
+})();
+
+// It stays open on a phone: coming back, or back online, syncs; so does a quarter hour in the foreground.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { store.set("left", Date.now()); return; }
+  const before = seen;
+  arrived();
+  if (seen !== before && state) { renderCounts(); renderList(); redrawMap(); }
+  sync();
+});
+addEventListener("online", sync);
+addEventListener("offline", renderSync);
+setInterval(() => { if (!document.hidden) sync(); }, 15 * 60e3);
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 </script>
 </body>
 </html>
