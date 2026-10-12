@@ -169,6 +169,17 @@
     #panelbody { flex: 1; overflow: auto; padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
                  overscroll-behavior: contain; }
     #panel[data-sheet="peek"] #panelbody { display: none; }
+    /* The list as cards: the title on its own line, then score, themes, evidence and when, small. */
+    #list { padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); }
+    #list thead { display: none; }
+    #list table, #list tbody { display: block; }
+    #list tr.row { display: flex; flex-wrap: wrap; gap: 3px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    #list td { border: 0; padding: 0; font-size: 13px; color: var(--text-secondary); }
+    #list td:empty, #list td.c-from { display: none; }
+    #list td.c-title { flex-basis: 100%; font-size: 16px; line-height: 1.35; color: var(--text-primary); }
+    #list td.c-score { font-weight: 600; color: var(--text-primary); }
+    #list td.c-score::before { content: "score "; font-weight: 400; color: var(--text-secondary); }
+    #list td.c-ev::after { content: " evidence"; }
   }
 </style>
 </head>
@@ -625,10 +636,11 @@ function renderList() {
       `<button data-order="recent" aria-pressed="${!best}">Most recent</button></p>` : "") +
     `<table><thead><tr><th>Idea</th>${scored() ? "<th>Score</th>" : ""}<th>From</th><th>Themes</th><th>Evidence</th><th>Last said</th></tr></thead><tbody>` +
     rows.map(n =>
-      `<tr class="row" data-id="${n.id}"><td>${n.starred ? "★ " : ""}${esc(n.title)}${isNew(n) ? ' <span class="tag">new</span>' : ""}</td>` +
-      (scored() ? `<td>${score(n)}</td>` : "") +
-      `<td>${n.origin === "archive" ? esc(n.ref) : "captured"}</td>` +
-      `<td>${esc(n.themes.join(", "))}</td><td>${n.evidence}</td><td>${day(n.last_said)}</td></tr>`).join("") +
+      `<tr class="row" data-id="${n.id}"><td class="c-title">${n.starred ? "★ " : ""}${esc(n.title)}${isNew(n) ? ' <span class="tag">new</span>' : ""}</td>` +
+      (scored() ? `<td class="c-score">${score(n)}</td>` : "") +
+      `<td class="c-from">${n.origin === "archive" ? esc(n.ref) : "captured"}</td>` +
+      `<td class="c-themes">${esc(n.themes.join(", "))}</td><td class="c-ev">${n.evidence || ""}</td>` +
+      `<td class="c-when">${day(n.last_said)}</td></tr>`).join("") +
     `</tbody></table>`;
   list.querySelectorAll("tr.row").forEach(tr => tr.addEventListener("click", () => { setTab("map"); show(tr.dataset.id); }));
   list.querySelectorAll("[data-order]").forEach(b => b.addEventListener("click", () => {
