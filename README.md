@@ -38,7 +38,7 @@ uv run pytest                                       # smoke tests against the re
 ```
 
 Don't bind it to the LAN or the internet: evidence quotes include other people's words. The one exception is the
-MCP endpoint alone, published for claude.ai and the phone app through a Cloudflare Tunnel behind a path secret and
+MCP endpoint alone, published for claude.ai and the phone app through a Cloudflare Tunnel, behind OAuth and
 Anthropic's address range ([docs/public-mcp.md](docs/public-mcp.md)), and only if you set it up.
 
 ## Always on

@@ -5,13 +5,14 @@ over HTTPS. Never bind it to the LAN or the internet, since evidence quotes incl
 """
 
 import argparse
+import html
 import json
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
-from lattice import auth, data, mcp
+from lattice import auth, data, mcp, oauth
 
 HERE = resources.files("lattice")
 STATIC = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
@@ -21,7 +22,7 @@ STATIC = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifes
           "/sw.js": ("sw.js", "text/javascript")}
 
 
-def answer_mcp(h: BaseHTTPRequestHandler) -> None:
+def answer_mcp(h: BaseHTTPRequestHandler, writes: bool = True) -> None:
     """One MCP exchange, JSON responses only, once the caller is authenticated. A browser page can't use it: a
     request with a foreign Origin is refused outright."""
     origin = h.headers.get("Origin")
@@ -35,10 +36,10 @@ def answer_mcp(h: BaseHTTPRequestHandler) -> None:
         h._json(mcp._error(None, -32700, "parse error"), 400)
         return
     if isinstance(message, list):   # a batch (older protocol versions)
-        answers = [a for a in (mcp.handle(m) for m in message) if a is not None]
+        answers = [a for a in (mcp.handle(m, writes=writes) for m in message) if a is not None]
         h._json(answers) if answers else h._send(202, b"", "application/json")
         return
-    answer = mcp.handle(message)
+    answer = mcp.handle(message, writes=writes)
     h._json(answer) if answer is not None else h._send(202, b"", "application/json")
 
 
@@ -166,33 +167,130 @@ class Handler(BaseHTTPRequestHandler):
 
 class PublicMcpHandler(Handler):
     """The MCP endpoint alone, for Claude apps that connect from Anthropic's cloud (claude.ai, the phone app),
-    reached through a Cloudflare Tunnel. Nothing else is served here: not the app, the snapshot or the review
-    queue. Two locks, since those clients can't send a bearer header:
+    reached through a Cloudflare Tunnel at LATTICE_PUBLIC_URL, with OAuth (lattice.oauth) in front of it. Nothing
+    else is served here: not the app, the snapshot or the review queue.
 
-    - the path carries a secret, /mcp/<LATTICE_MCP_SECRET>;
-    - the client address Cloudflare reports (CF-Connecting-IP) must be in LATTICE_MCP_ALLOW, by default Anthropic's
-      published outbound range. That range is every Claude user's, so it narrows who can knock, not who gets in.
-
-    Every refusal is a bare 404, so a scanner learns nothing. Requests are never logged: the path is the secret.
+    Everything but the sign-in page must come from LATTICE_MCP_ALLOW (by default Anthropic's outbound range), by the
+    client address Cloudflare reports. The sign-in page is opened in my own browser, so it's open to any address,
+    guarded by the Lattice token and a cap on wrong guesses. Requests are never logged.
     """
 
-    def _allowed(self) -> bool:
-        return auth.mcp_path_ok(self._path()) and auth.mcp_source_ok(self.headers.get("CF-Connecting-IP"))
+    def _base(self) -> str:
+        return auth.public_url()
+
+    def _from_claude(self) -> bool:
+        return auth.mcp_source_ok(self.headers.get("CF-Connecting-IP"))
 
     def _nothing(self) -> None:
         self._send(404, b"", "text/plain")
 
-    def do_POST(self) -> None:  # noqa: N802
-        answer_mcp(self) if self._allowed() else self._nothing()
+    def _oauth_error(self, e: oauth.OAuthError) -> None:
+        self._send(e.status, json.dumps({"error": e.error, "error_description": e.description}).encode(),
+                   "application/json")
+
+    def _form(self, limit: int = 8192) -> dict:
+        length = min(int(self.headers.get("Content-Length") or 0), limit)
+        return {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(length).decode(errors="replace")).items()}
+
+    def _page(self, status: int, body: str) -> None:
+        # The sign-in page can't be framed (clickjacking) and loads nothing from elsewhere.
+        self._send(status, body.encode(), "text/html; charset=utf-8",
+                   {"X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
+                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; "
+                                               "form-action 'self' https://claude.ai https://claude.com; "
+                                               "frame-ancestors 'none'"})
+
+    def _sign_in(self, status: int = 200, message: str = "", request: str = "", client: str = "", host: str = "") -> None:
+        esc = html.escape
+        page = (HERE.joinpath("authorize.html").read_text().replace("/*MESSAGE*/", esc(message))
+                .replace("/*REQUEST*/", esc(request)).replace("/*CLIENT*/", esc(client)).replace("/*HOST*/", esc(host)))
+        self._page(status, page)
+
+    def _back_to(self, uri: str, **params) -> None:
+        params = {k: v for k, v in params.items() if v is not None}
+        self._redirect(uri + ("&" if "?" in uri else "?") + urllib.parse.urlencode(params))
 
     def do_GET(self) -> None:  # noqa: N802
-        if self._allowed():   # no server-initiated stream
+        path, base = self._path(), self._base()
+        if path == "/authorize":
+            self._authorize_page()
+            return
+        if not self._from_claude():
+            self._nothing()
+        elif path in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"):
+            self._json(oauth.protected_resource(base))
+        elif path == "/.well-known/oauth-authorization-server":
+            self._json(oauth.authorization_server(base))
+        elif path == "/mcp":   # no server-initiated stream
             self._send(405, b'{"error": "POST only"}', "application/json", {"Allow": "POST"})
+        else:
+            self._nothing()
+
+    def do_POST(self) -> None:  # noqa: N802
+        path, base = self._path(), self._base()
+        if path == "/authorize":
+            self._authorize_submit()
+            return
+        if not self._from_claude():
+            self._nothing()
+        elif path == "/mcp":
+            grant = oauth.access(self.headers.get("Authorization"))
+            if grant is None:
+                bad = "invalid_token" if self.headers.get("Authorization") else None
+                self._send(401, b'{"error": "sign in first"}', "application/json",
+                           {"WWW-Authenticate": oauth.challenge_header(base, bad)})
+                return
+            answer_mcp(self, writes=oauth.WRITE in grant["scopes"])
+        elif path == "/register":
+            try:
+                length = min(int(self.headers.get("Content-Length") or 0), 8192)
+                meta = json.loads(self.rfile.read(length) or b"{}")
+                self._json(oauth.register(meta if isinstance(meta, dict) else {}), 201)
+            except ValueError:
+                self._oauth_error(oauth.OAuthError("invalid_client_metadata", "JSON only"))
+            except oauth.OAuthError as e:
+                self._oauth_error(e)
+        elif path == "/token":
+            try:
+                self._send(200, json.dumps(oauth.token(base, self._form())).encode(), "application/json",
+                           {"Pragma": "no-cache"})
+            except oauth.OAuthError as e:
+                self._oauth_error(e)
         else:
             self._nothing()
 
     def do_DELETE(self) -> None:  # noqa: N802
         self._nothing()
+
+    def _authorize_page(self) -> None:
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).items()}
+        try:
+            client, request = oauth.check_request(self._base(), q)
+        except oauth.Redirect as r:
+            self._back_to(r.uri, error=r.error, error_description=r.description, state=r.state, iss=self._base())
+            return
+        except oauth.OAuthError as e:
+            self._sign_in(400, f"Can't sign in: {e.description}")
+            return
+        host = urllib.parse.urlsplit(q["redirect_uri"]).hostname
+        self._sign_in(200, "", request, client["name"], host)
+
+    def _authorize_submit(self) -> None:
+        form = self._form()
+        if not oauth.login_allowed():
+            self._sign_in(429, "Too many wrong tokens this hour. Try again later.")
+            return
+        r = oauth.verify("request", form.get("request", ""))
+        if r is None:
+            self._sign_in(400, "This sign-in page expired. Start again from Claude.")
+            return
+        if not auth.token_ok(form.get("token", "")):
+            oauth.login_failed()
+            host = urllib.parse.urlsplit(r["redirect"]).hostname
+            self._sign_in(401, "That token didn't work.", form["request"], "Claude", host)
+            return
+        g = oauth.grant(form["request"], allow_writes=form.get("writes") == "on")
+        self._back_to(g["redirect"], code=g["code"], state=g["state"], iss=self._base())
 
 
 def main(argv=None) -> None:
@@ -202,16 +300,18 @@ def main(argv=None) -> None:
     s.add_argument("--host", default="127.0.0.1", help="address to bind (localhost; tailscale serve does the rest)")
     s.add_argument("--port", type=int, default=8790)
     s.add_argument("--mcp-port", type=int, default=8791,
-                   help="the public MCP listener's port, opened only when LATTICE_MCP_SECRET is set")
+                   help="the public MCP listener's port, opened only when LATTICE_PUBLIC_URL is set")
     args = p.parse_args(argv)
     auth.token()  # fail fast without a token
-    public = auth.mcp_secret() is not None   # and on a short secret or a bad allow list
+    public = auth.public_url()   # and on a bad public URL or allow list
+    if public:
+        auth.mcp_allow()
     with data.connect() as conn:  # and on a bad DSN or missing grants
         conn.execute("SELECT 1 FROM pub.ideas LIMIT 1")
     if public:
         mcp_server = ThreadingHTTPServer((args.host, args.mcp_port), PublicMcpHandler)
         threading.Thread(target=mcp_server.serve_forever, daemon=True).start()
-        print(f"Public MCP listener on http://{args.host}:{args.mcp_port}/mcp/<LATTICE_MCP_SECRET>, "
+        print(f"Public MCP listener on http://{args.host}:{args.mcp_port}/, published as {public}/mcp (OAuth), "
               f"for {', '.join(map(str, auth.mcp_allow()))}")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Lattice on http://{args.host}:{args.port}/")

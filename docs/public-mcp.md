@@ -1,43 +1,49 @@
 # Lattice's MCP endpoint for claude.ai and the phone app
 
 claude.ai and the Claude phone app (and so voice) connect to MCP servers from Anthropic's cloud, not from your
-device, so they can't reach the tailnet. This publishes **only the MCP endpoint** through a Cloudflare Tunnel. The
-app, the snapshot and the review queue stay tailnet-only, because the public listener doesn't serve them at all.
-
-## What protects it
-
-1. **A separate listener.** With `LATTICE_MCP_SECRET` set, `lattice serve` opens a second port (8791) that answers
-   exactly one path, `POST /mcp/<secret>`, and a bare 404 to everything else. The tunnel points only at this port.
-2. **A path secret.** claude.ai's custom connectors can't send a bearer header, so the secret goes in the URL.
-3. **Anthropic's address range, checked twice.** A Cloudflare WAF rule blocks every source outside Anthropic's
-   published outbound range, `160.79.104.0/21`
-   ([Anthropic: IP addresses](https://platform.claude.com/docs/en/api/ip-addresses)). Lattice checks it again from
-   `CF-Connecting-IP` (`LATTICE_MCP_ALLOW`), so a missing WAF rule doesn't open it up, and a request that skipped
-   the tunnel has no such header and is refused. That range is every Claude user's: it limits who can knock, and
-   the secret decides who gets in.
-4. **What goes out** is what the tailnet MCP endpoint gives: ideas, themes, quotes with speakers pseudonymized
-   ("me", "unknown", S1, S2...), as in Idea Machine's policy B. Writes are only star, link and note.
+device, so they can't reach the tailnet. This publishes **only the MCP endpoint**, with OAuth in front of it,
+through a Cloudflare Tunnel. The app, the snapshot and the review queue stay tailnet-only: the public listener
+doesn't serve them at all.
 
 Read this before turning it on. It reverses the rule in Idea Machine's `install/compose.yaml` ("never the LAN,
-never 0.0.0.0, never tailscale funnel") for this one endpoint:
-- **The secret in the path is the only real authentication.** `160.79.104.0/21` is all of Anthropic's outbound
-  traffic, every Claude user's connectors included, not just yours. Anyone who has the URL can use it from their own
-  Claude.
-- **That includes the write tools.** Whoever has the URL can read every idea and quote (speakers pseudonymized),
-  and can star, link and set notes. Those writes are feedback events marked `source = 'mcp'`, so they can be found
-  and deleted, but they'd steer Idea Machine until then.
-- **A path leaks more easily than a header.** The URL sits in Cloudflare's request logs, cloudflared's logs, any
-  proxy in between, connector settings and screenshots. Lattice itself never logs requests.
-- Cloudflare terminates TLS, so it sees this traffic in plain text.
+never 0.0.0.0, never tailscale funnel") for this one endpoint.
 
-OAuth would replace the path secret with a login that never sits in a URL, and it's the way to make this solid.
+## How it's protected
+
+1. **A separate listener.** With `LATTICE_PUBLIC_URL` set, `lattice serve` opens a second port (8791). It serves
+   the MCP endpoint, the OAuth endpoints and nothing else, and answers a bare 404 to everything else.
+2. **OAuth 2.1, with Lattice as its own authorization server** (`src/lattice/oauth.py`). Claude registers itself,
+   opens a sign-in page in your browser where you enter the **Lattice token**, and gets an access token (1 hour)
+   and a refresh token (30 days, rotated on every use; a reused one revokes its family). PKCE (S256) is required.
+   Codes go only to Claude's hosted callback (`https://claude.ai/api/mcp/auth_callback`, and `claude.com`).
+3. **Read-only or read and write.** The sign-in page has a checkbox for whether Claude may also star, link and set
+   notes. Without it the write tools don't exist for that connector.
+4. **Anthropic's address range, checked twice.** Claude's servers make every request except the sign-in page, and
+   they come from `160.79.104.0/21` ([Anthropic: IP addresses](https://platform.claude.com/docs/en/api/ip-addresses)).
+   A Cloudflare WAF rule blocks anything else, and Lattice checks again from `CF-Connecting-IP`
+   (`LATTICE_MCP_ALLOW`), so a missing WAF rule doesn't open it up. That range is every Claude user's, so it only
+   limits who can knock: OAuth decides who gets in.
+5. **The sign-in page is open to any address**, because your own browser opens it. It's guarded by the Lattice
+   token and refuses all sign-ins for the rest of the hour after 10 wrong tokens. It can't be framed.
+6. **What goes out** is what the tailnet MCP endpoint gives: ideas, themes and quotes, with speakers pseudonymized
+   ("me", "unknown", S1, S2...) as in Idea Machine's policy B.
+
+What's still different from the tailnet:
+- Cloudflare terminates TLS, so it sees this traffic in plain text, tokens included.
+- The Lattice token now unlocks something reachable from the internet (the sign-in page). Use a long random one,
+  as `install/nas.sh` makes.
+- Grants are signed with a key derived from the Lattice token, and nothing is stored. To cut off one connector,
+  remove it in Claude. To cut off all of them, change the Lattice token: that also logs out every device using
+  the app.
+
+Claude Code doesn't use this. It connects to the tailnet endpoint with the token (see the README).
 
 ## Set it up (on the NAS)
 
-1. **The secret.** Add it to Lattice's env file and keep the value for step 5:
+1. **The public URL.** Pick a hostname on a domain you have on Cloudflare, and add it to Lattice's env file:
 
    ```sh
-   echo "LATTICE_MCP_SECRET=$(openssl rand -hex 24)" >> /mnt/storage/ideamachine/config/lattice.env
+   echo "LATTICE_PUBLIC_URL=https://lattice-mcp.<your domain>" >> /mnt/storage/ideamachine/config/lattice.env
    ```
 
 2. **Compose** (Idea Machine's `install/compose.yaml`): publish the second port on loopback and add the tunnel.
@@ -59,28 +65,28 @@ OAuth would replace the path secret with a login that never sits in a URL, and i
    ```
 
 3. **The tunnel** (Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared).
-   Put its token in `config/cloudflared.env` as `TUNNEL_TOKEN=...`. Add one public hostname, e.g.
-   `lattice-mcp.<your domain>`, with service `HTTP` → `127.0.0.1:8791`. Nothing else goes on this tunnel.
+   Put its token in `config/cloudflared.env` as `TUNNEL_TOKEN=...`. Add one public hostname, the one in
+   `LATTICE_PUBLIC_URL`, with service `HTTP` → `127.0.0.1:8791`. Nothing else goes on this tunnel.
 
-4. **The WAF rule** (your domain → Security → WAF → Custom rules), action **Block**:
+4. **The WAF rule** (your domain → Security → WAF → Custom rules), action **Block**. It lets your browser reach the
+   sign-in page, and Anthropic reach the rest:
 
    ```
-   (http.host eq "lattice-mcp.<your domain>" and not ip.src in {160.79.104.0/21})
-   or (http.host eq "lattice-mcp.<your domain>" and not starts_with(http.request.uri.path, "/mcp/"))
+   http.host eq "lattice-mcp.<your domain>"
+   and not (http.request.uri.path eq "/authorize")
+   and not (ip.src in {160.79.104.0/21} and (http.request.uri.path in {"/mcp" "/token" "/register"}
+            or starts_with(http.request.uri.path, "/.well-known/oauth-")))
    ```
 
-   If Bot Fight Mode or a managed challenge is on for the domain, skip it for this hostname: Claude's requests
+   If Bot Fight Mode or a managed challenge is on for the domain, skip it for this hostname: Claude's servers
    can't solve a challenge.
 
 5. **Restart and connect.** Re-run `install/nas.sh` (or `docker compose up -d lattice cloudflared`). Then in
-   claude.ai → Settings → Connectors → Add custom connector, the URL is
-   `https://lattice-mcp.<your domain>/mcp/<the secret>`, with no OAuth. The connector shows up in the phone app too.
-
-## Rotate the secret
-
-Replace `LATTICE_MCP_SECRET` in `lattice.env`, restart the `lattice` container, and edit the connector's URL. Do it
-whenever the URL may have been seen (a screenshot, a shared chat), and to be rid of old copies in Cloudflare's logs.
+   claude.ai → Settings → Connectors → Add custom connector, enter `https://lattice-mcp.<your domain>/mcp` and
+   leave the OAuth fields empty. Claude opens Lattice's sign-in page: enter the Lattice token, decide about changes,
+   and Allow. The connector shows up in the phone app too.
 
 ## Turn it off
 
-Remove `LATTICE_MCP_SECRET` and restart Lattice: the listener isn't opened at all. Then delete the tunnel.
+Remove `LATTICE_PUBLIC_URL` and restart Lattice: the listener isn't opened at all. Then delete the tunnel and the
+connector.

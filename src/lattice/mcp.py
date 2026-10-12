@@ -177,15 +177,15 @@ TOOLS = {
 }
 
 
-def tool_list() -> list[dict]:
+def tool_list(writes: bool = True) -> list[dict]:
     return [{"name": name, "description": desc,
              "inputSchema": {"type": "object", "properties": props, "required": req, "additionalProperties": False},
              "annotations": {"readOnlyHint": ro, "destructiveHint": False, "openWorldHint": False}}
-            for name, (_, ro, desc, props, req) in TOOLS.items()]
+            for name, (_, ro, desc, props, req) in TOOLS.items() if ro or writes]
 
 
-def call(conn, name: str, args: dict) -> dict:
-    if name not in TOOLS:
+def call(conn, name: str, args: dict, writes: bool = True) -> dict:
+    if name not in TOOLS or not (TOOLS[name][1] or writes):   # a write tool on a read-only grant doesn't exist
         raise UnknownTool(name)
     fn, _, _, props, req = TOOLS[name]
     try:
@@ -198,8 +198,9 @@ def call(conn, name: str, args: dict) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}], "structuredContent": result}
 
 
-def handle(message, connect=data.connect):
-    """One JSON-RPC message in, its response out (None for a notification)."""
+def handle(message, connect=data.connect, writes: bool = True):
+    """One JSON-RPC message in, its response out (None for a notification). `writes`: whether the caller may star,
+    link and note (a read-only OAuth grant may not)."""
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
         return _error(message.get("id") if isinstance(message, dict) else None, -32600, "invalid request")
     mid, method, params = message.get("id"), message["method"], message.get("params") or {}
@@ -213,11 +214,11 @@ def handle(message, connect=data.connect):
     if method == "ping":
         return _result(mid, {})
     if method == "tools/list":
-        return _result(mid, {"tools": tool_list()})
+        return _result(mid, {"tools": tool_list(writes)})
     if method == "tools/call":
         try:
             with connect() as conn:
-                return _result(mid, call(conn, params.get("name"), params.get("arguments") or {}))
+                return _result(mid, call(conn, params.get("name"), params.get("arguments") or {}, writes))
         except UnknownTool:
             return _error(mid, -32602, f"unknown tool {params.get('name')!r}")
     return _error(mid, -32601, f"method not found: {method}")

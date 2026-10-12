@@ -48,14 +48,15 @@ def bearer_ok(header: str | None) -> bool:
 ANTHROPIC_OUTBOUND = "160.79.104.0/21"
 
 
-def mcp_secret() -> str | None:
-    """LATTICE_MCP_SECRET: the path secret of the public MCP listener. Unset, there is no public listener."""
-    s = os.environ.get("LATTICE_MCP_SECRET", "")
-    if not s:
+def public_url() -> str | None:
+    """LATTICE_PUBLIC_URL: where claude.ai reaches the public MCP listener (https://host, no path), which is also
+    the OAuth issuer. Unset, there is no public listener."""
+    url = os.environ.get("LATTICE_PUBLIC_URL", "").strip().rstrip("/")
+    if not url:
         return None
-    if len(s) < 32 or not s.replace("-", "").replace("_", "").isalnum():
-        raise SystemExit("LATTICE_MCP_SECRET must be at least 32 letters, digits, - or _ (e.g. openssl rand -hex 24)")
-    return s
+    if not url.startswith("https://") or url.count("/") != 2:
+        raise SystemExit("LATTICE_PUBLIC_URL must be https://<host>, with no path (e.g. https://lattice-mcp.example.com)")
+    return url
 
 
 def mcp_allow() -> list:
@@ -64,11 +65,6 @@ def mcp_allow() -> list:
                 os.environ.get("LATTICE_MCP_ALLOW", ANTHROPIC_OUTBOUND).split(",") if n.strip()]
     except ValueError as e:
         raise SystemExit(f"LATTICE_MCP_ALLOW: {e}") from None
-
-
-def mcp_path_ok(path: str) -> bool:
-    secret = mcp_secret()
-    return secret is not None and hmac.compare_digest(path.encode(), f"/mcp/{secret}".encode())
 
 
 def mcp_source_ok(address: str | None) -> bool:
