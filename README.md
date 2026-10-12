@@ -12,7 +12,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   neighbouring scores or a shared theme. The order shown is random and recorded.
 - **Map**: ideas laid out by meaning (`pub.idea_positions`, a 2D projection Idea Machine keeps stable), colored by
   theme, sized by weight (evidence, and a star counts for two), with connections. Tap an idea for its evidence:
-  star it, correct it, link it to another idea, or keep / discard its captures in place. A dashed ring marks ideas
+  star it, correct it, link it to another idea, or keep / discard its captures in place. Tap a theme to see what
+  it is and its ideas, best first, with Pin / Reject in view; the map zooms to them and dims the rest. A dashed ring marks ideas
   that are new since your last visit (the app was away for over half an hour).
 - **List** and search, best first once Idea Machine scores ideas (`pub.idea_scores`), with each idea's score and
   why in its panel.

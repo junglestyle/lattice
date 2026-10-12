@@ -66,6 +66,11 @@
   .hint { color: var(--text-muted); }
   .theme-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-top: 1px solid var(--border); }
   .theme-row .name { flex: 1; }
+  .theme-row { cursor: pointer; }
+  .theme-row:hover { background: var(--surface-2); }
+  .theme-row .chev { color: var(--text-muted); font-size: 18px; padding: 0 2px 0 4px; }
+  #back { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+  .idea-link { text-align: left; font-size: 14px; color: var(--text-primary); }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--text-secondary); font-weight: 600; }
@@ -648,8 +653,13 @@ function renderList() {
   }));
 }
 
+// The theme open in the panel (or the one an open idea was reached from) dims the map's other ideas.
+const focusTheme = () => state.graph.themes.find(t => t.id === (shownTheme || fromTheme))?.name;
 function filter() {
-  if (mapNodes) mapNodes.attr("opacity", n => hit(n) ? 1 : 0.15);
+  const focus = focusTheme();
+  const lit = n => hit(n) && (!focus || n.themes.includes(focus));
+  if (mapNodes) mapNodes.attr("opacity", n => lit(n) ? 1 : 0.15);
+  if (mapLabels) mapLabels.attr("opacity", n => lit(n) ? 1 : 0.2);
   renderList();
 }
 document.getElementById("search").addEventListener("input", filter);
@@ -658,7 +668,8 @@ document.getElementById("search").addEventListener("input", filter);
 const weight = n => n.evidence + (n.starred ? 2 : 0);
 const radius = n => 5 + 3 * Math.sqrt(weight(n));
 
-let mapNodes = null, drawn = false, shown = null;
+let mapNodes = null, drawn = false, shown = null, shownTheme = null, fromTheme = null;
+let mapZoom = null, mapSvg = null, mapBox = null, mapLabels = null;   // to zoom to a theme's ideas
 const placed = new Map();   // where each idea was last drawn, so a redraw doesn't scatter the map
 let view = null;            // the zoom, kept across redraws
 
@@ -687,7 +698,7 @@ function drawMap() {
     `<span><i class="ln"></i>evolves</span><span><i class="ln" style="border-top-style:dashed"></i>archive link</span>` +
     `<span><i class="ln" style="border-top-width:1px;border-color:var(--edge)"></i>related</span>` +
     `<span><i class="ln" style="border-color:var(--text-primary);border-top-style:dotted"></i>your link</span>`;
-  if (!shown) renderThemes();
+  if (!shown && !shownTheme) renderThemes();
 
   const degree = Object.fromEntries(nodes.map(n => [n.id, 0]));
   links.forEach(l => { degree[id(l.source)]++; degree[id(l.target)]++; });
@@ -705,6 +716,7 @@ function drawMap() {
     .append("path").attr("d", "M0,0L10,5L0,10z").attr("fill", css("--edge-strong"));
   const g = svg.append("g");
   const zoom = d3.zoom().scaleExtent([0.2, 4]).on("zoom", e => { view = e.transform; g.attr("transform", e.transform); });
+  [mapZoom, mapSvg, mapBox] = [zoom, svg, {W, H}];
   svg.call(zoom);
 
   const edge = g.append("g").selectAll("line").data(links).join("line")
@@ -782,6 +794,7 @@ function drawMap() {
   }
   sim.on("tick", place);   // dragging restarts it
   mapNodes = node;
+  mapLabels = label;
   filter();
 }
 
@@ -823,27 +836,85 @@ document.getElementById("sheetclose").addEventListener("click", () => sheet("pee
 
 // The panel with nothing selected: themes, with Pin / Reject for the proposals.
 function renderThemes() {
-  shown = null;
+  shown = shownTheme = fromTheme = null;
+  filter();
   document.getElementById("sheettitle").textContent = "Themes";
   document.getElementById("panelbody").innerHTML =
     `<p class="hint">Tap an idea to see its evidence. Outlined circles come from the archive; filled ones were
      captured from conversation. Size grows with evidence and a star; a dashed ring marks what's new since your
      last visit.</p><h2>Themes</h2>` +
-    state.graph.themes.map(t => `<div class="theme-row" data-id="${t.id}"><span class="name">${esc(t.name)}
+    state.graph.themes.map(t => `<div class="theme-row" data-id="${t.id}" role="button" tabindex="0"
+        aria-label="Open ${esc(t.name)}"><span class="name">${esc(t.name)}
         <span class="muted">· ${t.ideas}${t.rejected ? " · rejected (next run)" : t.pinned ? (t.proposed ? " · pinned" : "")
           : t.proposed ? " · proposed" : ""}</span></span>` +
       (t.proposed && !t.pinned && !t.rejected ? `<button data-act="pin_theme">Pin</button><button data-act="reject_theme">Reject</button>` : "") +
-      `</div>`).join("");
-  document.querySelectorAll(".theme-row button").forEach(b => b.addEventListener("click", async () => {
+      `<span class="chev" aria-hidden="true">›</span></div>`).join("");
+  document.querySelectorAll(".theme-row button").forEach(b => b.addEventListener("click", async e => {
+    e.stopPropagation();
     await act({kind: b.dataset.act, theme_id: b.closest(".theme-row").dataset.id});
     renderThemes();
   }));
+  document.querySelectorAll(".theme-row").forEach(r => {
+    r.addEventListener("click", () => showTheme(r.dataset.id));
+    r.addEventListener("keydown", e => { if (e.key === "Enter") showTheme(r.dataset.id); });
+  });
 }
 
-function show(ideaId) {
+// One theme: what it is, its ideas best first, and Pin / Reject with them in view. The map zooms to its ideas.
+function showTheme(themeId) {
+  const t = state.graph.themes.find(x => x.id === themeId);
+  if (!t) { renderThemes(); return; }
+  shown = fromTheme = null;
+  shownTheme = themeId;
+  const ideas = state.graph.nodes.filter(n => n.themes.includes(t.name))
+    .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || b.starred - a.starred || b.evidence - a.evidence);
+  const status = t.rejected ? "rejected (next run)" : t.pinned ? "pinned" : t.proposed ? "proposed by clustering" : "";
+  document.getElementById("sheettitle").textContent = t.name;
+  if (sheetLevel() === "peek") sheet("half");
+  const body = document.getElementById("panelbody");
+  body.scrollTop = 0;
+  body.innerHTML = `<p><button id="back">← Themes</button>` +
+      (t.proposed && !t.pinned && !t.rejected ? ` <button data-act="pin_theme">Pin</button> <button data-act="reject_theme">Reject</button>` : "") +
+      (t.pinned && t.proposed ? ` <button data-act="unpin_theme">Unpin</button>` : "") + `</p>` +
+    `<h2>${esc(t.name)}</h2>` +
+    (t.description ? `<p class="statement">${esc(t.description)}</p>` : "") +
+    `<p class="meta">${ideas.length} idea${ideas.length === 1 ? "" : "s"}${status ? ` · ${status}` : ""}</p>` +
+    ideas.map(n => `<div class="ev"><button class="linkbtn idea-link" data-go="${n.id}">${n.starred ? "★ " : ""}${esc(n.title)}</button>` +
+      `<div class="by">${n.score != null ? `score ${n.score.toFixed(2)} · ` : ""}${n.evidence ? `${n.evidence} evidence · ` : ""}` +
+      `${n.origin === "archive" ? "archive" : day(n.last_said)}${isNew(n) ? " · new" : ""}</div></div>`).join("");
+  body.querySelector("#back").addEventListener("click", renderThemes);
+  body.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", async () => {
+    await act({kind: b.dataset.act, theme_id: themeId});
+    showTheme(themeId);
+  }));
+  body.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go, themeId)));
+  filter();
+  zoomTo(ideas);
+}
+
+// Fit the map to some ideas, leaving room for the sheet on a phone.
+function zoomTo(nodes) {
+  if (!mapZoom || !nodes.length || nodes.some(n => n.x == null)) return;
+  const {W, H} = mapBox, pad = 40;
+  // The sheet may still be sliding, so go by the height it's heading for (CSS: 55dvh half, 52px peek).
+  const phone = matchMedia("(max-width: 760px)").matches;
+  const covered = !phone ? 0 : sheetLevel() === "half" ? innerHeight * 0.55 : sheetLevel() === "full" ? H : 52;
+  const h = Math.max(120, H - covered);
+  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+  const [x0, x1, y0, y1] = [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...ys) - pad, Math.max(...ys) + pad];
+  const k = Math.min(2.5, W / (x1 - x0), h / (y1 - y0));
+  mapSvg.transition().duration(400).call(mapZoom.transform,
+    d3.zoomIdentity.translate(W / 2 - k * (x0 + x1) / 2, h / 2 - k * (y0 + y1) / 2).scale(k));
+}
+
+function show(ideaId, viaTheme) {
   const d = state.ideas[ideaId];
   if (!d) { renderThemes(); return; }
+  if (viaTheme !== undefined) fromTheme = viaTheme;
+  else if (shown !== ideaId) fromTheme = null;   // reached from the map or the list, not from a theme
   shown = ideaId;
+  shownTheme = null;
+  const backTo = state.graph.themes.find(t => t.id === fromTheme);
   const title = nid => state.ideas[nid]?.title ?? "(an idea no longer in the lattice)";
   const kinds = {evolves: "evolves", archive: "archive link", related: "related", mine: "your link"};
   const conns = state.graph.links.filter(l => id(l.source) === ideaId || id(l.target) === ideaId)
@@ -853,7 +924,7 @@ function show(ideaId) {
   if (sheetLevel() === "peek") sheet("half");   // on a phone, tapping an idea opens the sheet
   document.getElementById("panelbody").scrollTop = 0;
   document.getElementById("panelbody").innerHTML =
-    `<p><button id="back">← Themes</button> <button id="staridea">${d.starred ? "★ Starred" : "☆ Star"}</button>` +
+    `<p><button id="back">← ${backTo ? esc(backTo.name) : "Themes"}</button> <button id="staridea">${d.starred ? "★ Starred" : "☆ Star"}</button>` +
     ` <button id="editidea">Edit</button> <button id="linkidea">Link to…</button></p>` +
     `<div id="paneledit"></div><div id="linker" hidden></div>` +
     `<h2>${esc(d.title)}</h2><p class="statement">${esc(d.statement)}</p>` +
@@ -877,7 +948,8 @@ function show(ideaId) {
         `<button data-v="item_star">★ Star</button><button data-v="item_discard">Discard</button></div>`) +
       `</div>`).join("");
   const panel = document.getElementById("panel");
-  panel.querySelector("#back").addEventListener("click", renderThemes);
+  panel.querySelector("#back").addEventListener("click", () => backTo ? showTheme(backTo.id) : renderThemes());
+  filter();
   panel.querySelector("#editidea").addEventListener("click", () =>
     editor(panel.querySelector("#paneledit"), {id: ideaId, title: d.title, statement: d.statement, note: d.my_note},
            () => show(ideaId)));
@@ -929,7 +1001,7 @@ function renderAll() {
   renderCounts();
   renderList();
   redrawMap();
-  if (shown) show(shown); else renderThemes();
+  if (shown) show(shown); else if (shownTheme) showTheme(shownTheme); else renderThemes();
   renderSync();
 }
 
