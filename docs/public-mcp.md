@@ -50,22 +50,14 @@ Claude Code doesn't use this. It connects to the tailnet endpoint with the token
    echo "LATTICE_PUBLIC_URL=https://lattice-mcp.<your domain>" >> /mnt/storage/ideamachine/config/lattice.env
    ```
 
-2. **Compose** (Idea Machine's `install/compose.yaml`): publish the second port on loopback and add the tunnel.
+2. **The tunnel's token.** Idea Machine's `install/compose.yaml` already has the tunnel (`cloudflared`, profile
+   `public`) and publishes port 8791 on loopback. `install/nas.sh` starts the tunnel whenever `lattice.env` has
+   `LATTICE_PUBLIC_URL`, checks that the public listener answers 401, and removes the tunnel when the URL is gone.
+   It only needs the token from step 3, in `config/cloudflared.env` (it asks for it if it's missing):
 
-   ```yaml
-     lattice:
-       ports:
-         - "127.0.0.1:8790:8790"
-         - "127.0.0.1:8791:8791"   # the public MCP listener; only cloudflared talks to it
-
-     # Publishes only Lattice's MCP listener (docs/public-mcp.md in Lattice). Outbound-only: no ports opened.
-     cloudflared:
-       image: cloudflare/cloudflared:<a current release>
-       container_name: lattice-tunnel
-       command: tunnel --no-autoupdate run
-       env_file: /mnt/storage/ideamachine/config/cloudflared.env   # TUNNEL_TOKEN=..., root only
-       network_mode: host          # to reach 127.0.0.1:8791
-       restart: unless-stopped
+   ```sh
+   echo "TUNNEL_TOKEN=<the tunnel's token>" > /mnt/storage/ideamachine/config/cloudflared.env
+   chmod 600 /mnt/storage/ideamachine/config/cloudflared.env
    ```
 
 3. **The tunnel** (Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared).
@@ -93,7 +85,8 @@ Claude Code doesn't use this. It connects to the tailnet endpoint with the token
    If Bot Fight Mode or a managed challenge is on for the domain, skip it for this hostname: Claude's servers
    can't solve a challenge.
 
-5. **Restart, then connect** as below. Re-run `install/nas.sh` (or `docker compose up -d lattice cloudflared`).
+5. **Deploy, then connect** as below: `git pull` in both clones on the NAS, then re-run `install/nas.sh`. The
+   tunnel should show **Healthy** in Cloudflare.
 
 ## Add or re-add a connector
 
@@ -112,5 +105,5 @@ but it is exposed to the internet until you switch the rule back on.
 
 ## Turn it off
 
-Remove `LATTICE_PUBLIC_URL` and restart Lattice: the listener isn't opened at all. Then delete the tunnel and the
-connector.
+Remove `LATTICE_PUBLIC_URL` from `lattice.env` and re-run `install/nas.sh`: Lattice no longer opens the listener,
+and the tunnel container is removed. Then delete the tunnel in Cloudflare and the connector in claude.ai.
