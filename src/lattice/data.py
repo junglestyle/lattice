@@ -178,6 +178,10 @@ EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_
 WINNERS = ("first", "second", "tie")
 
 
+class NotYet(Exception):
+    """Idea Machine's database doesn't take this kind of event yet (its migration isn't deployed): try again later."""
+
+
 def record(conn, event: dict, source: str = "lattice") -> int:
     """Append one feedback event. Raises ValueError for anything not in EVENTS. `source`: the app, or 'mcp'."""
     kind = event.get("kind")
@@ -205,9 +209,16 @@ def record(conn, event: dict, source: str = "lattice") -> int:
         payload = {"winner": event["winner"]}
         if str(event.get("note") or "").strip():
             payload["note"] = str(event["note"]).strip()[:500]
-    return conn.execute(
-        f"""INSERT INTO pub.feedback_events (kind, {target}, other_idea_id, payload, source)
-            VALUES (%s, %s, %s, %s, %s) RETURNING event_id""", (kind, ref, other, json.dumps(payload), source)).fetchone()[0]
+    try:
+        return conn.execute(
+            f"""INSERT INTO pub.feedback_events (kind, {target}, other_idea_id, payload, source)
+                VALUES (%s, %s, %s, %s, %s) RETURNING event_id""",
+            (kind, ref, other, json.dumps(payload), source)).fetchone()[0]
+    except psycopg.errors.CheckViolation as e:
+        # Only an unknown kind is worth retrying; any other check means the event itself is wrong, and always will be.
+        if e.diag.constraint_name == "feedback_events_kind_check":
+            raise NotYet(f"Idea Machine doesn't accept {kind} events yet") from None
+        raise ValueError(f"Idea Machine refused the event ({e.diag.constraint_name})") from None
 
 
 def status(conn) -> dict:

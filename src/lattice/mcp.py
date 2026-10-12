@@ -12,8 +12,6 @@ import json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-import psycopg
-
 from lattice import data
 
 PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"]   # newest first; the first is offered when the client's isn't
@@ -192,7 +190,7 @@ def record_comparison(conn, first_idea_id: str, second_idea_id: str, winner: str
     try:
         data.record(conn, {"kind": "idea_compare", "idea_id": a, "other_idea_id": b, "winner": winner, "note": note},
                     source="mcp")
-    except psycopg.errors.CheckViolation:
+    except data.NotYet:
         raise ToolError("Idea Machine doesn't accept comparisons yet") from None
     return {"first_idea_id": a, "second_idea_id": b, "winner": winner}
 
@@ -256,7 +254,7 @@ def call(conn, name: str, args: dict, writes: bool = True) -> dict:
         if missing:
             raise ToolError(f"missing {', '.join(missing)}")
         result = fn(conn, **{k: v for k, v in args.items() if k in props})
-    except (ToolError, ValueError, TypeError) as e:
+    except (ToolError, data.NotYet, ValueError, TypeError) as e:
         return {"content": [{"type": "text", "text": str(e)}], "isError": True}
     return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}], "structuredContent": result}
 
