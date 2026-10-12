@@ -144,12 +144,31 @@
            border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; display: none; }
 
   #legendbtn { display: none; }
+  #sheetbar { display: none; }
   @media (max-width: 760px) {
-    /* On a phone the legend folds away behind a button; the map gets the room. */
+    /* On a phone the legend folds away behind a button, and the map gets the whole screen. Themes and ideas live in
+       a bottom sheet over it: a bar when lowered, half the screen when an idea is tapped, all of it to read. Drag
+       the bar or use its buttons. */
     body[data-view="map"] #legendbtn { display: inline-block; }
     body[data-view="map"] header .legend:not(.open) { display: none; }
-    main[data-view="map"] #mapview { grid-template-columns: 1fr; grid-template-rows: 60vh auto; overflow: auto; }
-    #panel { border-left: 0; border-top: 1px solid var(--border); }
+    body[data-view="map"] header #counts { display: none; }
+    main[data-view="map"] #mapview { grid-template-columns: 1fr; overflow: hidden; }
+    #panel { position: fixed; left: 0; right: 0; bottom: 0; z-index: 4; padding: 0; border: 1px solid var(--border);
+             border-bottom: 0; border-radius: 14px 14px 0 0; background: var(--surface-1); box-shadow: 0 -6px 24px #0003;
+             display: flex; flex-direction: column; overflow: hidden; transition: height .2s ease; }
+    #panel[data-sheet="peek"] { height: calc(52px + env(safe-area-inset-bottom)); }
+    #panel[data-sheet="half"] { height: 55dvh; }
+    #panel[data-sheet="full"] { height: calc(100dvh - env(safe-area-inset-top) - 8px); }
+    #sheetbar { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 10px 12px 6px; flex: none;
+                position: relative; touch-action: none; cursor: grab; border-bottom: 1px solid var(--border); }
+    #sheetbar .grip { position: absolute; top: 5px; left: 50%; width: 36px; height: 4px; border-radius: 2px;
+                      transform: translateX(-50%); background: var(--edge); }
+    #sheettitle { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sheetbar button { min-width: 36px; min-height: 32px; }
+    #panel[data-sheet="peek"] #sheetclose { display: none; }
+    #panelbody { flex: 1; overflow: auto; padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+                 overscroll-behavior: contain; }
+    #panel[data-sheet="peek"] #panelbody { display: none; }
   }
 </style>
 </head>
@@ -172,7 +191,10 @@
 </header>
 <main data-view="review">
   <section id="review" aria-live="polite"></section>
-  <section id="mapview"><div id="graph"></div><aside id="panel"></aside></section>
+  <section id="mapview"><div id="graph"></div><aside id="panel" data-sheet="peek" aria-label="Themes and ideas">
+    <div id="sheetbar"><span class="grip" aria-hidden="true"></span><span id="sheettitle">Themes</span>
+      <button id="sheetsize" aria-label="Expand">⤢</button><button id="sheetclose" aria-label="Lower">✕</button></div>
+    <div id="panelbody"></div></aside></section>
   <section id="list"></section>
 </main>
 <div class="tip" id="tip"></div>
@@ -756,10 +778,42 @@ document.getElementById("legendbtn").addEventListener("click", e => {
   e.target.setAttribute("aria-expanded", open);
 });
 
+// The bottom sheet (phones only; on a wide screen the panel is a column and these do nothing visible).
+const LEVELS = ["peek", "half", "full"];
+const sheetLevel = () => document.getElementById("panel").dataset.sheet;
+function sheet(level) {
+  const panel = document.getElementById("panel");
+  panel.dataset.sheet = level;
+  const size = document.getElementById("sheetsize");
+  size.textContent = level === "full" ? "\u2921" : "\u2922";
+  size.setAttribute("aria-label", level === "full" ? "Shrink" : "Expand");
+}
+document.getElementById("sheetsize").addEventListener("click", () => sheet(sheetLevel() === "full" ? "half" : "full"));
+document.getElementById("sheetclose").addEventListener("click", () => sheet("peek"));
+(() => {   // drag the bar up or down a level; a tap on a lowered sheet opens it
+  const bar = document.getElementById("sheetbar");
+  let y0 = null;
+  bar.addEventListener("pointerdown", e => {
+    if (e.target.closest("button")) return;
+    y0 = e.clientY;
+    bar.setPointerCapture(e.pointerId);   // the release counts even if the finger has left the bar
+  });
+  bar.addEventListener("pointerup", e => {
+    if (y0 === null) return;
+    const dy = e.clientY - y0, i = LEVELS.indexOf(sheetLevel());
+    y0 = null;
+    if (dy < -30) sheet(LEVELS[Math.min(i + 1, 2)]);
+    else if (dy > 30) sheet(LEVELS[Math.max(i - 1, 0)]);
+    else if (sheetLevel() === "peek") sheet("half");
+  });
+  bar.addEventListener("pointercancel", () => { y0 = null; });
+})();
+
 // The panel with nothing selected: themes, with Pin / Reject for the proposals.
 function renderThemes() {
   shown = null;
-  document.getElementById("panel").innerHTML =
+  document.getElementById("sheettitle").textContent = "Themes";
+  document.getElementById("panelbody").innerHTML =
     `<p class="hint">Tap an idea to see its evidence. Outlined circles come from the archive; filled ones were
      captured from conversation. Size grows with evidence and a star; a dashed ring marks what's new since your
      last visit.</p><h2>Themes</h2>` +
@@ -783,7 +837,10 @@ function show(ideaId) {
   const conns = state.graph.links.filter(l => id(l.source) === ideaId || id(l.target) === ideaId)
     .map(l => ({other: id(l.source) === ideaId ? id(l.target) : id(l.source), kind: l.kind}));
   const verdictWord = {keep: "kept", star: "★", discard: "discarded"};
-  document.getElementById("panel").innerHTML =
+  document.getElementById("sheettitle").textContent = d.title;
+  if (sheetLevel() === "peek") sheet("half");   // on a phone, tapping an idea opens the sheet
+  document.getElementById("panelbody").scrollTop = 0;
+  document.getElementById("panelbody").innerHTML =
     `<p><button id="back">← Themes</button> <button id="staridea">${d.starred ? "★ Starred" : "☆ Star"}</button>` +
     ` <button id="editidea">Edit</button> <button id="linkidea">Link to…</button></p>` +
     `<div id="paneledit"></div><div id="linker" hidden></div>` +
