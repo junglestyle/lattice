@@ -8,5 +8,7 @@ RUN cd /src && UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --frozen --no-dev --no-e
 ENV PATH=/opt/venv/bin:$PATH
 USER 568:568
 EXPOSE 8790
+# The public MCP listener (docs/public-mcp.md), opened only when LATTICE_MCP_SECRET is set.
+EXPOSE 8791
 # 0.0.0.0 inside the container only; compose publishes it on the host's loopback.
-CMD ["lattice", "serve", "--host", "0.0.0.0", "--port", "8790"]
+CMD ["lattice", "serve", "--host", "0.0.0.0", "--port", "8790", "--mcp-port", "8791"]

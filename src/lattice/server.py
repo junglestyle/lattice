@@ -6,6 +6,7 @@ over HTTPS. Never bind it to the LAN or the internet, since evidence quotes incl
 
 import argparse
 import json
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
@@ -18,6 +19,27 @@ STATIC = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifes
           "/icon-512.png": ("icon-512.png", "image/png"),
           "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
           "/sw.js": ("sw.js", "text/javascript")}
+
+
+def answer_mcp(h: BaseHTTPRequestHandler) -> None:
+    """One MCP exchange, JSON responses only, once the caller is authenticated. A browser page can't use it: a
+    request with a foreign Origin is refused outright."""
+    origin = h.headers.get("Origin")
+    if origin and urllib.parse.urlsplit(origin).netloc != h.headers.get("Host"):
+        h._json({"error": "foreign origin"}, 403)
+        return
+    length = min(int(h.headers.get("Content-Length") or 0), 65536)
+    try:
+        message = json.loads(h.rfile.read(length) or b"null")
+    except ValueError:
+        h._json(mcp._error(None, -32700, "parse error"), 400)
+        return
+    if isinstance(message, list):   # a batch (older protocol versions)
+        answers = [a for a in (mcp.handle(m) for m in message) if a is not None]
+        h._json(answers) if answers else h._send(202, b"", "application/json")
+        return
+    answer = mcp.handle(message)
+    h._json(answer) if answer is not None else h._send(202, b"", "application/json")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -84,27 +106,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(e)}, 400)
 
     def _mcp(self) -> None:
-        """MCP over Streamable HTTP (lattice.mcp), JSON responses only. The bearer token is LATTICE_TOKEN. A browser
-        page can't use it: it would need the token, and a request with a foreign Origin is refused outright."""
-        origin = self.headers.get("Origin")
-        if origin and urllib.parse.urlsplit(origin).netloc != self.headers.get("Host"):
-            self._json({"error": "foreign origin"}, 403)
-            return
+        """MCP over Streamable HTTP (lattice.mcp) for tailnet clients. The bearer token is LATTICE_TOKEN."""
         if not auth.bearer_ok(self.headers.get("Authorization")):
             self._send(401, b'{"error": "bearer token required"}', "application/json", {"WWW-Authenticate": "Bearer"})
             return
-        length = min(int(self.headers.get("Content-Length") or 0), 65536)
-        try:
-            message = json.loads(self.rfile.read(length) or b"null")
-        except ValueError:
-            self._json(mcp._error(None, -32700, "parse error"), 400)
-            return
-        if isinstance(message, list):   # a batch (older protocol versions)
-            answers = [a for a in (mcp.handle(m) for m in message) if a is not None]
-            self._json(answers) if answers else self._send(202, b"", "application/json")
-            return
-        answer = mcp.handle(message)
-        self._json(answer) if answer is not None else self._send(202, b"", "application/json")
+        answer_mcp(self)
 
     def do_DELETE(self) -> None:  # noqa: N802  (MCP session teardown: there are no sessions)
         self._json({"error": "no sessions"}, 405)
@@ -158,16 +164,55 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class PublicMcpHandler(Handler):
+    """The MCP endpoint alone, for Claude apps that connect from Anthropic's cloud (claude.ai, the phone app),
+    reached through a Cloudflare Tunnel. Nothing else is served here: not the app, the snapshot or the review
+    queue. Two locks, since those clients can't send a bearer header:
+
+    - the path carries a secret, /mcp/<LATTICE_MCP_SECRET>;
+    - the client address Cloudflare reports (CF-Connecting-IP) must be in LATTICE_MCP_ALLOW, by default Anthropic's
+      published outbound range. That range is every Claude user's, so it narrows who can knock, not who gets in.
+
+    Every refusal is a bare 404, so a scanner learns nothing. Requests are never logged: the path is the secret.
+    """
+
+    def _allowed(self) -> bool:
+        return auth.mcp_path_ok(self._path()) and auth.mcp_source_ok(self.headers.get("CF-Connecting-IP"))
+
+    def _nothing(self) -> None:
+        self._send(404, b"", "text/plain")
+
+    def do_POST(self) -> None:  # noqa: N802
+        answer_mcp(self) if self._allowed() else self._nothing()
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self._allowed():   # no server-initiated stream
+            self._send(405, b'{"error": "POST only"}', "application/json", {"Allow": "POST"})
+        else:
+            self._nothing()
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        self._nothing()
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="lattice", description="Lattice: navigate the idea lattice")
     sub = p.add_subparsers(required=True, metavar="command")
     s = sub.add_parser("serve", help="serve the app")
     s.add_argument("--host", default="127.0.0.1", help="address to bind (localhost; tailscale serve does the rest)")
     s.add_argument("--port", type=int, default=8790)
+    s.add_argument("--mcp-port", type=int, default=8791,
+                   help="the public MCP listener's port, opened only when LATTICE_MCP_SECRET is set")
     args = p.parse_args(argv)
     auth.token()  # fail fast without a token
+    public = auth.mcp_secret() is not None   # and on a short secret or a bad allow list
     with data.connect() as conn:  # and on a bad DSN or missing grants
         conn.execute("SELECT 1 FROM pub.ideas LIMIT 1")
+    if public:
+        mcp_server = ThreadingHTTPServer((args.host, args.mcp_port), PublicMcpHandler)
+        threading.Thread(target=mcp_server.serve_forever, daemon=True).start()
+        print(f"Public MCP listener on http://{args.host}:{args.mcp_port}/mcp/<LATTICE_MCP_SECRET>, "
+              f"for {', '.join(map(str, auth.mcp_allow()))}")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Lattice on http://{args.host}:{args.port}/")
     server.serve_forever()

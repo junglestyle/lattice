@@ -20,8 +20,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
   `get_idea`, `list_themes`, `open_theme`, `whats_new`, and, when you ask, `star_idea`, `link_ideas`, `note_idea`.
-  It takes the Lattice token as a bearer header and is tailnet-only like the rest, so a Claude app that connects
-  from Anthropic's cloud (claude.ai, the phone app) can't reach it. Speakers are pseudonymized per answer ("me",
+  It takes the Lattice token as a bearer header and is tailnet-only like the rest. For claude.ai and the phone
+  app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",
   "unknown", S1, S2...), as in Idea Machine's privacy policy B. From Claude Code on a tailnet machine:
 
   ```sh
@@ -37,7 +37,9 @@ uv run lattice serve                                # http://127.0.0.1:8790/
 uv run pytest                                       # smoke tests against the real database (read-only)
 ```
 
-Don't bind it to the LAN or the internet: evidence quotes include other people's words.
+Don't bind it to the LAN or the internet: evidence quotes include other people's words. The one exception is the
+MCP endpoint alone, published for claude.ai and the phone app through a Cloudflare Tunnel behind a path secret and
+Anthropic's address range ([docs/public-mcp.md](docs/public-mcp.md)), and only if you set it up.
 
 ## Always on
 

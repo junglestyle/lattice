@@ -6,6 +6,7 @@ device out. It's HttpOnly and SameSite=Strict, and Secure when the request came 
 
 import hashlib
 import hmac
+import ipaddress
 import os
 
 COOKIE = "lattice_session"
@@ -41,6 +42,42 @@ def bearer_ok(header: str | None) -> bool:
     """`Authorization: Bearer <LATTICE_TOKEN>`, for the MCP endpoint (a client there has no cookie)."""
     scheme, _, value = (header or "").partition(" ")
     return scheme.lower() == "bearer" and token_ok(value.strip())
+
+
+# Anthropic's outbound range for MCP calls to external servers (platform.claude.com/docs/en/api/ip-addresses).
+ANTHROPIC_OUTBOUND = "160.79.104.0/21"
+
+
+def mcp_secret() -> str | None:
+    """LATTICE_MCP_SECRET: the path secret of the public MCP listener. Unset, there is no public listener."""
+    s = os.environ.get("LATTICE_MCP_SECRET", "")
+    if not s:
+        return None
+    if len(s) < 32 or not s.replace("-", "").replace("_", "").isalnum():
+        raise SystemExit("LATTICE_MCP_SECRET must be at least 32 letters, digits, - or _ (e.g. openssl rand -hex 24)")
+    return s
+
+
+def mcp_allow() -> list:
+    try:
+        return [ipaddress.ip_network(n.strip()) for n in
+                os.environ.get("LATTICE_MCP_ALLOW", ANTHROPIC_OUTBOUND).split(",") if n.strip()]
+    except ValueError as e:
+        raise SystemExit(f"LATTICE_MCP_ALLOW: {e}") from None
+
+
+def mcp_path_ok(path: str) -> bool:
+    secret = mcp_secret()
+    return secret is not None and hmac.compare_digest(path.encode(), f"/mcp/{secret}".encode())
+
+
+def mcp_source_ok(address: str | None) -> bool:
+    """The client address Cloudflare reports. Missing means the request didn't come through the tunnel."""
+    try:
+        ip = ipaddress.ip_address((address or "").strip())
+    except ValueError:
+        return False
+    return any(ip in net for net in mcp_allow())
 
 
 def set_cookie(secure: bool) -> str:
