@@ -92,3 +92,24 @@ def test_a_star_from_conversation_is_a_feedback_event(url, admin):
     finally:
         admin.execute("DELETE FROM pub.feedback_events WHERE event_id > %s AND idea_id = %s AND source = 'mcp'",
                       (before, idea))
+
+
+def test_best_ideas_ranks_by_idea_machines_score(url, admin, monkeypatch):
+    from uuid import UUID
+
+    from lattice import data
+
+    a, b = [i for (i,) in admin.execute("SELECT idea_id FROM pub.ideas ORDER BY idea_id LIMIT 2")]
+    real = data.scores
+    monkeypatch.setattr(data, "scores", lambda conn: {})
+    assert tool(url, "best_ideas")["isError"]   # nothing scored yet, as on eeyore today
+    fake = {a: {"score": 0.4, "generality": 2, "novelty": 2, "compression": 3, "outside_value": 2, "recurrence": 0.0,
+                "why": "Narrow."},
+            b: {"score": 0.9, "generality": 5, "novelty": 4, "compression": 4, "outside_value": 5, "recurrence": 0.5,
+                "why": "Travels well."}}
+    monkeypatch.setattr(data, "scores", lambda conn: fake)
+    best = tool(url, "best_ideas", limit=5)["structuredContent"]["ideas"]
+    assert [UUID(i["id"]) for i in best] == [b, a] and best[0]["why"] == "Travels well." and best[0]["score"] == 0.9
+    assert tool(url, "get_idea", idea_id=str(b))["structuredContent"]["ranking"]["novelty"] == 4
+    monkeypatch.setattr(data, "scores", real)
+    assert isinstance(real(data.connect()), dict)   # the real view reads, scored or not

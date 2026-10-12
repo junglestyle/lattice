@@ -11,7 +11,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   theme, sized by weight (evidence, and a star counts for two), with connections. Tap an idea for its evidence:
   star it, correct it, link it to another idea, or keep / discard its captures in place. A dashed ring marks ideas
   that are new since your last visit (the app was away for over half an hour).
-- **List** and search.
+- **List** and search, best first once Idea Machine scores ideas (`pub.idea_scores`), with each idea's score and
+  why in its panel.
 - **Local-first.** The page carries no data. It renders a copy of `pub` kept in IndexedDB (`/api/snapshot`), and a
   service worker keeps the page itself, so the app opens and navigates offline. Feedback goes into a queue,
   applied to the copy at once and sent when the server can be reached; the copy is rebuilt from the server's
@@ -19,7 +20,7 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   from the phone too. Logging out (in the run-status panel) clears the copy and the queue.
 
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
-  `get_idea`, `list_themes`, `open_theme`, `whats_new`, and, when you ask, `star_idea`, `link_ideas`, `note_idea`.
+  `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, and, when you ask, `star_idea`, `link_ideas`, `note_idea`.
   It takes the Lattice token as a bearer header and is tailnet-only like the rest. For claude.ai and the phone
   app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",
   "unknown", S1, S2...), as in Idea Machine's privacy policy B. From Claude Code on a tailnet machine:

@@ -512,16 +512,32 @@ function renderCounts() {
   b.textContent = `${fresh} new since your last visit`;
 }
 
+// Best first once Idea Machine has scored ideas (pub.idea_scores); otherwise, or by choice, most recent first.
+const scored = () => state.graph.nodes.some(n => n.score != null);
+const order = () => scored() ? store.get("order") || "best" : "recent";
+const score = n => n.score == null ? "" : n.score.toFixed(2);
+
 function renderList() {
   const list = document.getElementById("list");
   const rows = state.graph.nodes.filter(hit);
-  list.innerHTML = `<table><thead><tr><th>Idea</th><th>From</th><th>Themes</th><th>Evidence</th><th>Last said</th></tr></thead><tbody>` +
-    rows.sort((a, b) => isNew(b) - isNew(a) || (b.last_said || "").localeCompare(a.last_said || "")).map(n =>
+  const best = order() === "best";
+  const recent = (a, b) => (b.last_said || "").localeCompare(a.last_said || "");
+  rows.sort(best ? (a, b) => (b.score ?? -1) - (a.score ?? -1) || recent(a, b)
+                 : (a, b) => isNew(b) - isNew(a) || recent(a, b));
+  list.innerHTML = (scored() ? `<p class="chips" role="group" aria-label="Order">` +
+      `<button data-order="best" aria-pressed="${best}">Best first</button>` +
+      `<button data-order="recent" aria-pressed="${!best}">Most recent</button></p>` : "") +
+    `<table><thead><tr><th>Idea</th>${scored() ? "<th>Score</th>" : ""}<th>From</th><th>Themes</th><th>Evidence</th><th>Last said</th></tr></thead><tbody>` +
+    rows.map(n =>
       `<tr class="row" data-id="${n.id}"><td>${n.starred ? "★ " : ""}${esc(n.title)}${isNew(n) ? ' <span class="tag">new</span>' : ""}</td>` +
+      (scored() ? `<td>${score(n)}</td>` : "") +
       `<td>${n.origin === "archive" ? esc(n.ref) : "captured"}</td>` +
       `<td>${esc(n.themes.join(", "))}</td><td>${n.evidence}</td><td>${day(n.last_said)}</td></tr>`).join("") +
     `</tbody></table>`;
   list.querySelectorAll("tr.row").forEach(tr => tr.addEventListener("click", () => { setTab("map"); show(tr.dataset.id); }));
+  list.querySelectorAll("[data-order]").forEach(b => b.addEventListener("click", () => {
+    store.set("order", b.dataset.order); renderList();
+  }));
 }
 
 function filter() {
@@ -704,6 +720,9 @@ function show(ideaId) {
     `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : "Captured from conversation"}` +
     `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
     (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
+    (d.ranking ? `<p class="meta">Score ${d.ranking.score.toFixed(2)} · generality ${d.ranking.generality} · ` +
+      `novelty ${d.ranking.novelty} · compression ${d.ranking.compression} · ` +
+      `interest to a stranger ${d.ranking.outside_value} (of 5)${d.ranking.why ? `<br>${esc(d.ranking.why)}` : ""}</p>` : "") +
     (conns.length ? `<div class="ev"><b>Connected to</b>${conns.map(c => `<div class="conn">
         <button class="linkbtn" data-go="${c.other}">${esc(title(c.other))}</button>
         <span class="k">${kinds[c.kind] || esc(c.kind)}</span>

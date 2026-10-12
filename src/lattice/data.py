@@ -20,11 +20,11 @@ def graph(conn) -> dict:
         """SELECT idea_id, title, statement, origin, archive_ref, themes, n_evidence, kept, discarded, starred,
                   first_said, last_said, corrected, created_at
            FROM pub.ideas""").fetchall()
-    where = positions(conn)
+    where, ranked = positions(conn), scores(conn)
     nodes = [{"id": str(i), "title": t, "statement": s, "origin": o, "ref": ref, "themes": list(th),
               "evidence": n, "kept": k, "discarded": d, "starred": st, "corrected": c, "created_at": made.isoformat(),
               "first_said": f.isoformat() if f else None, "last_said": last.isoformat() if last else None,
-              "pos": where.get(i)}
+              "pos": where.get(i), "score": ranked.get(i, {}).get("score")}
              for i, t, s, o, ref, th, n, k, d, st, f, last, c, made in ideas]
     links = [{"source": str(a), "target": str(b), "kind": kind, "weight": w}
              for a, b, kind, w in conn.execute("SELECT a, b, kind, weight FROM pub.connections")]
@@ -41,6 +41,19 @@ def positions(conn) -> dict:
         return {i: [x, y] for i, x, y in conn.execute("SELECT idea_id, x, y FROM pub.idea_positions")}
     except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
         return {}
+
+
+def scores(conn) -> dict:
+    """Each scored idea's ranking from Idea Machine (pub.idea_scores): score 0-1 and the reasons, once it's published.
+    Ideas not scored yet are left out."""
+    try:
+        rows = conn.execute("""SELECT idea_id, score, generality, novelty, compression, outside_value, recurrence, why
+                               FROM pub.idea_scores WHERE score IS NOT NULL""").fetchall()
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        return {}
+    return {i: {"score": float(sc), "generality": g, "novelty": n, "compression": c, "outside_value": o,
+                "recurrence": float(r) if r is not None else None, "why": why}
+            for i, sc, g, n, c, o, r, why in rows}
 
 
 def idea(conn, idea_id: str) -> dict | None:
@@ -71,8 +84,8 @@ def evidence_of(conn, idea_id: str | None = None) -> dict:
 
 def details(conn) -> dict:
     """Every idea as the map's panel shows it, for the copy the app keeps on the device."""
-    evidence = evidence_of(conn)
-    return {str(i): {"id": str(i), "title": t, "statement": s, "origin": o, "ref": ref, "notes": notes,
+    evidence, ranked = evidence_of(conn), scores(conn)
+    return {str(i): {"ranking": ranked.get(i), "id": str(i), "title": t, "statement": s, "origin": o, "ref": ref, "notes": notes,
                      "themes": list(th), "starred": st, "evidence": evidence.get(i, []), "corrected": c,
                      "claude_title": ct, "claude_statement": cs, "my_note": mine}
             for i, t, s, o, ref, notes, th, st, ct, cs, mine, c in conn.execute(

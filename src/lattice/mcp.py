@@ -48,10 +48,32 @@ class UnknownTool(Exception):
     pass
 
 
-def _brief(row) -> dict:
+def _brief(row, ranked: dict | None = None) -> dict:
     i, title, statement, themes, n, starred, made = row
-    return {"id": str(i), "title": title, "statement": statement, "themes": list(themes), "evidence": n,
-            "starred": starred, "created_at": made.isoformat()}
+    out = {"id": str(i), "title": title, "statement": statement, "themes": list(themes), "evidence": n,
+           "starred": starred, "created_at": made.isoformat()}
+    if ranked and i in ranked:
+        out["score"] = round(ranked[i]["score"], 2)
+    return out
+
+
+def best_ideas(conn, limit: int = 10, theme: str | None = None) -> dict:
+    ranked = data.scores(conn)
+    if not ranked:
+        raise ToolError("Idea Machine hasn't scored any ideas yet")
+    limit = max(1, min(int(limit), 50))
+    rows = conn.execute(f"SELECT {BRIEF} FROM pub.ideas WHERE idea_id = ANY(%s)"
+                        + (" AND lower(%s) = ANY(SELECT lower(t) FROM unnest(themes) t)" if theme else ""),
+                        [list(ranked), *([theme.strip()] if theme else [])]).fetchall()
+    rows.sort(key=lambda r: -ranked[r[0]]["score"])
+    ideas = []
+    for r in rows[:limit]:
+        x = ranked[r[0]]
+        ideas.append(_brief(r, ranked) | {"why": x["why"], "generality": x["generality"], "novelty": x["novelty"],
+                                          "compression": x["compression"], "outside_value": x["outside_value"]})
+    return {"theme": theme, "ideas": ideas,
+            "how_scored": "0.7 x a Claude rubric (generality, novelty, compression, interest to a thoughtful "
+                          "stranger, each 1-5) + 0.2 x recurrence across captures + 0.1 if starred"}
 
 
 BRIEF = "idea_id, title, statement, themes, n_evidence, starred, created_at"
@@ -87,6 +109,9 @@ def get_idea(conn, idea_id: str) -> dict:
                WHERE %(i)s IN (c.a, c.b) ORDER BY c.kind, d.title""", {"i": found["id"]})]
     if not found["corrected"]:
         found.pop("claude_title"), found.pop("claude_statement")
+    ranking = data.scores(conn).get(UUID(found["id"]))
+    if ranking:
+        found["ranking"] = ranking
     return found
 
 
@@ -159,6 +184,10 @@ TOOLS = {
                                                              "default": 10}}, ["query"]),
     "get_idea": (get_idea, True, "One idea in full: statement, your note and corrections, themes, connections, "
                  "and the evidence quotes with who said them and when.", {"idea_id": ID}, ["idea_id"]),
+    "best_ideas": (best_ideas, True, "The owner's best ideas by Idea Machine's score, best first, each with why "
+                   "it scored as it did; optionally within one theme.",
+                   {"limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+                    "theme": {"type": "string", "description": "A theme's exact name"}}, []),
     "list_themes": (list_themes, True, "Every theme with its size and whether it's pinned or only proposed.", {}, []),
     "open_theme": (open_theme, True, "The ideas in one theme, starred and best-evidenced first.",
                    {"theme": {"type": "string", "description": "A theme's name (or part of it) or id"}}, ["theme"]),
