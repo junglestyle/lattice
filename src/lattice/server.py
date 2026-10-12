@@ -12,6 +12,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
+import psycopg
+
 from lattice import auth, data, mcp, oauth
 
 HERE = resources.files("lattice")
@@ -105,6 +107,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"event_id": data.record(conn, event)}, 201)
         except (ValueError, TypeError, AttributeError) as e:
             self._json({"error": str(e)}, 400)
+        except psycopg.errors.CheckViolation:
+            # A kind Idea Machine's database doesn't take yet: 503, so the app keeps it queued and tries later.
+            self._json({"error": "Idea Machine doesn't accept this yet"}, 503)
 
     def _mcp(self) -> None:
         """MCP over Streamable HTTP (lattice.mcp) for tailnet clients. The bearer token is LATTICE_TOKEN."""

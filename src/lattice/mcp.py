@@ -12,6 +12,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+import psycopg
+
 from lattice import data
 
 PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"]   # newest first; the first is offered when the client's isn't
@@ -171,6 +173,30 @@ def link_ideas(conn, idea_id: str, other_idea_id: str, unlink: bool = False) -> 
     return {"idea_id": a, "other_idea_id": b, "linked": not unlink}
 
 
+def compare_pair(conn) -> dict:
+    pair = data.next_pair(conn)
+    if pair is None:
+        raise ToolError("no pair left to compare")
+    rows = {str(i): (t, st) for i, t, st in conn.execute(
+        "SELECT idea_id, title, statement FROM pub.ideas WHERE idea_id = ANY(%s::uuid[])",
+        ([pair["first"], pair["second"]],))}
+    return {"first": {"id": pair["first"], "title": rows[pair["first"]][0], "statement": rows[pair["first"]][1]},
+            "second": {"id": pair["second"], "title": rows[pair["second"]][0], "statement": rows[pair["second"]][1]},
+            "why_this_pair": pair["reason"],
+            "ask": "Read both to the owner in this order and ask which is the better idea, or if they're about the "
+                   "same; then call record_comparison with their answer. Don't answer for them."}
+
+
+def record_comparison(conn, first_idea_id: str, second_idea_id: str, winner: str, note: str = "") -> dict:
+    a, b = _uuid(first_idea_id, "first_idea_id"), _uuid(second_idea_id, "second_idea_id")
+    try:
+        data.record(conn, {"kind": "idea_compare", "idea_id": a, "other_idea_id": b, "winner": winner, "note": note},
+                    source="mcp")
+    except psycopg.errors.CheckViolation:
+        raise ToolError("Idea Machine doesn't accept comparisons yet") from None
+    return {"first_idea_id": a, "second_idea_id": b, "winner": winner}
+
+
 def note_idea(conn, idea_id: str, note: str) -> dict:
     data.record(conn, {"kind": "idea_note", "idea_id": _uuid(idea_id), "note": note}, source="mcp")
     return {"idea_id": idea_id, "note": str(note).strip()[:1000] or None}
@@ -200,6 +226,14 @@ TOOLS = {
                    "unlink=true). Only when the owner asks.",
                    {"idea_id": ID, "other_idea_id": ID, "unlink": {"type": "boolean", "default": False}},
                    ["idea_id", "other_idea_id"]),
+    "compare_pair": (compare_pair, True, "Two ideas to ask the owner \"which is the better idea?\" about, chosen "
+                     "to teach Idea Machine's ranking the most. Only when the owner wants to compare ideas.", {}, []),
+    "record_comparison": (record_comparison, False, "Record the owner's answer to compare_pair: which idea they "
+                          "said is better (first or second, in the order you read them) or tie.",
+                          {"first_idea_id": ID, "second_idea_id": ID,
+                           "winner": {"type": "string", "enum": ["first", "second", "tie"]},
+                           "note": {"type": "string", "maxLength": 500, "description": "Why, if the owner said"}},
+                          ["first_idea_id", "second_idea_id", "winner"]),
     "note_idea": (note_idea, False, "Set the owner's context note on an idea (replaces the old one; empty clears "
                   "it). Only when the owner asks.",
                   {"idea_id": ID, "note": {"type": "string", "maxLength": 1000}}, ["idea_id", "note"]),

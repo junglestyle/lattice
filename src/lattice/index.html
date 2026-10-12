@@ -107,6 +107,10 @@
   .chips button { border-radius: 999px; padding: 5px 12px; font-size: 13px; }
   .chips button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   .why input { width: 100%; padding: 8px 10px; }
+  .pick { display: block; width: 100%; text-align: left; padding: 14px 16px; margin: 0 0 12px; border-radius: 10px;
+          font-size: 16px; line-height: 1.4; }
+  .pick b { display: block; margin-bottom: 4px; }
+  .pick span { color: var(--text-secondary); font-size: 15px; }
   .done { max-width: 640px; margin: 48px auto; text-align: center; color: var(--text-secondary); }
   /* Run status: an icon in the status color, the words in text colors (never color alone). */
   .status { margin-left: auto; background: none; border: 0; padding: 2px 0; font-size: 13px;
@@ -236,6 +240,8 @@ function applyEvent(st, e) {
   } else if (e.kind.endsWith("_theme")) {
     const t = st.graph.themes.find(t => t.id === e.theme_id);
     if (t) e.kind === "reject_theme" ? t.rejected = true : t.pinned = e.kind === "pin_theme";
+  } else if (e.kind === "idea_compare") {
+    st.compared = [...(st.compared || []), [e.idea_id, e.other_idea_id].sort()];
   } else if (e.kind === "link" || e.kind === "unlink") {
     st.graph.links = st.graph.links.filter(l => !(l.kind === "mine" && samePair(l, e.idea_id, e.other_idea_id)));
     if (e.kind === "link") st.graph.links.push({source: e.idea_id, target: e.other_idea_id, kind: "mine", weight: 1});
@@ -389,7 +395,71 @@ let cardId;   // the capture on screen; a sync redraws the card only when it cha
 function renderReview() {
   const {items, total} = state.review;
   document.getElementById("badge").textContent = total ? `· ${total}` : "";
-  if (items[0]?.id !== cardId || !items.length) renderCard();
+  if (items[0]?.id !== cardId || (!items.length && !comparing)) renderCard();
+}
+
+// --- Which is better? ---------------------------------------------------------------------------------------
+// Once the captures run out, I can compare ideas two at a time: a steadier signal for Idea Machine's ranking than
+// keep and discard. Idea Machine picks the pairs (pub.compare_pairs) when it publishes them; otherwise two ideas
+// with neighbouring scores, else two sharing a theme. A pair is never asked twice, and the order shown is random.
+
+let comparing = false;
+const skipped = new Set();
+
+function nextPair() {
+  const key = (a, b) => [a, b].sort().join(" ");
+  const done = new Set((state.compared || []).map(([a, b]) => key(a, b)));
+  const fresh = (a, b) => a !== b && state.ideas[a] && state.ideas[b] && !done.has(key(a, b)) && !skipped.has(key(a, b));
+  const pick = xs => xs[Math.floor(Math.random() * xs.length)];
+  let pair = null, reason = null;
+  const suggested = (state.pairs || []).find(p => fresh(p.first, p.second));
+  if (suggested) [pair, reason] = [[suggested.first, suggested.second], suggested.reason];
+  if (!pair) {
+    const ranked = state.graph.nodes.filter(n => n.score != null).sort((a, b) => a.score - b.score);
+    const close = ranked.slice(1).map((n, i) => [n.score - ranked[i].score, ranked[i].id, n.id])
+      .filter(([, a, b]) => fresh(a, b)).sort((x, y) => x[0] - y[0]).slice(0, 10);
+    if (close.length) { const [, a, b] = pick(close); [pair, reason] = [[a, b], "close_scores"]; }
+  }
+  if (!pair) {
+    const options = [];
+    for (const t of state.graph.themes) {
+      const members = state.graph.nodes.filter(n => n.themes.includes(t.name)).map(n => n.id);
+      members.forEach((a, i) => members.slice(i + 1).forEach(b => { if (fresh(a, b)) options.push([a, b]); }));
+    }
+    if (options.length) [pair, reason] = [pick(options), "same_theme"];
+  }
+  if (!pair) return null;
+  if (Math.random() < 0.5) pair.reverse();
+  return {first: pair[0], second: pair[1], reason};
+}
+
+const REASON = {never_compared: "not compared before", mixed_criteria: "mixed signals", close_scores: "close scores",
+                same_theme: "same theme"};
+
+function renderCompare() {
+  const box = document.getElementById("review");
+  const pair = nextPair();
+  if (!pair) { comparing = false; renderCard(); return; }
+  const card = (id, w) => `<button class="pick" data-w="${w}"><b>${esc(state.ideas[id].title)}</b>` +
+                          `<span>${esc(state.ideas[id].statement)}</span></button>`;
+  box.innerHTML = `<article class="card">
+      <div class="meta"><span>Which is the better idea?</span>${pair.reason ? `<span>${esc(REASON[pair.reason] || pair.reason)}</span>` : ""}</div>
+      <p class="gist">Better meaning: more worth keeping, building on or telling someone.</p>
+      ${card(pair.first, "first")}${card(pair.second, "second")}
+    </article>
+    <div class="actions"><div class="row">
+      <button id="cmp-stop">Stop</button><button id="cmp-skip">Can't say</button><button id="cmp-tie">About the same</button>
+    </div></div>`;
+  const answer = async winner => {
+    await act({kind: "idea_compare", idea_id: pair.first, other_idea_id: pair.second, winner});
+    renderCompare();
+  };
+  box.querySelectorAll(".pick").forEach(b => b.addEventListener("click", () => answer(b.dataset.w)));
+  box.querySelector("#cmp-tie").addEventListener("click", () => answer("tie"));
+  box.querySelector("#cmp-skip").addEventListener("click", () => {
+    skipped.add([pair.first, pair.second].sort().join(" ")); renderCompare();
+  });
+  box.querySelector("#cmp-stop").addEventListener("click", () => { comparing = false; renderCard(); });
 }
 
 function renderCard() {
@@ -397,9 +467,13 @@ function renderCard() {
   const item = state.review.items[0];
   cardId = item?.id;
   document.getElementById("badge").textContent = state.review.total ? `· ${state.review.total}` : "";
+  if (!item && comparing) { renderCompare(); return; }
   if (!item) {
     box.innerHTML = `<div class="done"><p>${state.review.total ? "That's all this device holds; more on the next sync."
-                                          : "Nothing waiting. New captures arrive with each hourly run."}</p></div>`;
+                                          : "Nothing waiting. New captures arrive with each hourly run."}</p>
+      ${nextPair() ? `<p><button id="cmp-start">Compare ideas two at a time</button></p>
+        <p class="muted">Which of two is better? It tunes how Idea Machine ranks your ideas.</p>` : ""}</div>`;
+    box.querySelector("#cmp-start")?.addEventListener("click", () => { comparing = true; renderCompare(); });
     return;
   }
   box.innerHTML = `<article class="card">

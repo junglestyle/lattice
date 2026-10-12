@@ -2,6 +2,7 @@
 
 import json
 import os
+import random
 from uuid import UUID
 
 import psycopg
@@ -93,10 +94,59 @@ def details(conn) -> dict:
                           claude_statement, my_note, corrected FROM pub.ideas""")}
 
 
+def compare_pairs(conn) -> list[dict]:
+    """The pairs Idea Machine most wants my "which is better?" on (pub.compare_pairs), once it publishes them."""
+    try:
+        return [{"first": str(a), "second": str(b), "reason": r}
+                for a, b, r in conn.execute("SELECT idea_id, other_idea_id, reason FROM pub.compare_pairs")]
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        return []
+
+
+def compared(conn) -> list[list[str]]:
+    """Pairs I've already compared, either way round, so they aren't asked again."""
+    return [sorted([str(a), str(b)]) for a, b in conn.execute(
+        "SELECT DISTINCT idea_id, other_idea_id FROM pub.feedback_events WHERE kind = 'idea_compare'")]
+
+
+def next_pair(conn, rng=random) -> dict | None:
+    """One pair to ask "which is better?" about: Idea Machine's pick if it publishes any, else two ideas with
+    neighbouring scores, else two ideas sharing a theme. Never a pair already compared; the order shown is random,
+    so position bias averages out."""
+    done = {tuple(p) for p in compared(conn)}
+    fresh = lambda a, b: a != b and tuple(sorted([a, b])) not in done   # noqa: E731
+    pair, reason = None, None
+    suggested = [p for p in compare_pairs(conn) if fresh(p["first"], p["second"])]
+    if suggested:
+        pair, reason = (suggested[0]["first"], suggested[0]["second"]), suggested[0]["reason"]
+    else:
+        ideas = conn.execute("SELECT idea_id::text, themes FROM pub.ideas").fetchall()
+        ranked = {str(k): v["score"] for k, v in scores(conn).items()}
+        if len(ranked) >= 2:
+            order = sorted(ranked, key=ranked.get)
+            close = sorted((ranked[b] - ranked[a], a, b) for a, b in zip(order, order[1:]) if fresh(a, b))
+            if close:
+                _, a, b = rng.choice(close[:10])
+                pair, reason = (a, b), "close_scores"
+        if pair is None:
+            by_theme: dict = {}
+            for i, themes in ideas:
+                for t in themes:
+                    by_theme.setdefault(t, []).append(i)
+            options = [(a, b) for members in by_theme.values() for a in members for b in members if a < b and fresh(a, b)]
+            if options:
+                pair, reason = rng.choice(options), "same_theme"
+    if pair is None:
+        return None
+    first, second = rng.sample(pair, 2)
+    return {"first": first, "second": second, "reason": reason}
+
+
 def snapshot(conn) -> dict:
     """Everything the app shows, in one piece. The device replaces its copy with this on every sync, so what Idea
     Machine forgets is gone from the phone too."""
-    return {"graph": graph(conn), "ideas": details(conn), "review": review(conn, limit=500), "status": status(conn)}
+    return {"graph": graph(conn), "ideas": details(conn), "review": review(conn, limit=500), "status": status(conn),
+            "pairs": compare_pairs(conn), "compared": compared(conn)}
 
 
 def review(conn, limit: int = 50) -> dict:
@@ -124,7 +174,8 @@ def review(conn, limit: int = 50) -> dict:
 EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_id",
           "star": "idea_id", "unstar": "idea_id", "idea_correct": "idea_id", "idea_note": "idea_id",
           "pin_theme": "theme_id", "unpin_theme": "theme_id", "reject_theme": "theme_id",
-          "link": "idea_id", "unlink": "idea_id"}
+          "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id"}
+WINNERS = ("first", "second", "tie")
 
 
 def record(conn, event: dict, source: str = "lattice") -> int:
@@ -144,10 +195,16 @@ def record(conn, event: dict, source: str = "lattice") -> int:
     elif kind == "idea_note":   # context for the idea; empty clears it
         payload = {"note": str(event.get("note") or "").strip()[:1000]}
     other = None
-    if kind in ("link", "unlink"):   # my links between two ideas, undirected
+    if kind in ("link", "unlink", "idea_compare"):   # links are undirected; a comparison keeps the order shown
         other = str(UUID(str(event.get("other_idea_id", ""))))
         if other == ref:
-            raise ValueError("an idea can't link to itself")
+            raise ValueError("an idea can't link to or be compared with itself")
+    if kind == "idea_compare":   # idea_id was shown first, other_idea_id second
+        if event.get("winner") not in WINNERS:
+            raise ValueError(f"winner must be one of {', '.join(WINNERS)}")
+        payload = {"winner": event["winner"]}
+        if str(event.get("note") or "").strip():
+            payload["note"] = str(event["note"]).strip()[:500]
     return conn.execute(
         f"""INSERT INTO pub.feedback_events (kind, {target}, other_idea_id, payload, source)
             VALUES (%s, %s, %s, %s, %s) RETURNING event_id""", (kind, ref, other, json.dumps(payload), source)).fetchone()[0]

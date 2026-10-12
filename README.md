@@ -6,7 +6,10 @@ Its only write, from a later slice, will be appending to `pub.feedback_events`.
 
 What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 
-- **Review** one capture at a time, with keep / ★ / discard and one-tap reasons, on the phone.
+- **Review** one capture at a time, with keep / ★ / discard and one-tap reasons, on the phone. When the captures
+  run out, **compare ideas** two at a time ("which is better?", `idea_compare` events): a steadier signal for Idea
+  Machine's ranking than keep and discard. Idea Machine picks the pairs (`pub.compare_pairs`); without them,
+  neighbouring scores or a shared theme. The order shown is random and recorded.
 - **Map**: ideas laid out by meaning (`pub.idea_positions`, a 2D projection Idea Machine keeps stable), colored by
   theme, sized by weight (evidence, and a star counts for two), with connections. Tap an idea for its evidence:
   star it, correct it, link it to another idea, or keep / discard its captures in place. A dashed ring marks ideas
@@ -20,7 +23,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   from the phone too. Logging out (in the run-status panel) clears the copy and the queue.
 
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
-  `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, and, when you ask, `star_idea`, `link_ideas`, `note_idea`.
+  `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, `compare_pair`, and, when you ask, `star_idea`, `link_ideas`, `note_idea`,
+  `record_comparison`.
   It takes the Lattice token as a bearer header and is tailnet-only like the rest. For claude.ai and the phone
   app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",
   "unknown", S1, S2...), as in Idea Machine's privacy policy B. From Claude Code on a tailnet machine:
