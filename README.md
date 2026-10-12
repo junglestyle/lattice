@@ -15,6 +15,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   star it, correct it, link it to another idea, or keep / discard its captures in place. Tap a theme to see what
   it is and its ideas, best first, with Pin / Reject in view; the map zooms to them and dims the rest. A dashed ring marks ideas
   that are new since your last visit (the app was away for over half an hour).
+- **Bridges**, a switch on the map: ideas that touch two or more themes (in several, or linked across) stay lit,
+  with only the cross-theme links; the panel lists the strongest and what they connect.
 - **Territories**, a switch on the map: the same places read as a map, each area colored by the theme of its
   nearest idea, with theme names where each theme is densest.
 - **Time**: one row per idea, a dot for every time it came up; Recurring puts what keeps coming back first.

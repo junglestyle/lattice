@@ -229,6 +229,8 @@
     data-mode="territories">Territories</button></span>
   <span class="counts map-only" id="counts"></span>
   <button class="newbtn" id="newbtn" aria-pressed="false" hidden></button>
+  <button class="newbtn map-only" id="bridgebtn" aria-pressed="false"
+    title="Ideas that connect two or more themes">Bridges</button>
   <button id="legendbtn" aria-expanded="false">Legend</button>
   <div class="legend map-only" id="legend"></div>
 </header>
@@ -686,9 +688,11 @@ function renderList() {
 const focusTheme = () => state.graph.themes.find(t => t.id === (shownTheme || fromTheme))?.name;
 function filter() {
   const focus = focusTheme();
-  const lit = n => hit(n) && (!focus || n.themes.includes(focus));
+  const b = bridgesOn ? bridges() : null;
+  const lit = n => hit(n) && (!focus || n.themes.includes(focus)) && (!b || b.has(n.id));
   if (mapNodes) mapNodes.attr("opacity", n => lit(n) ? 1 : 0.15);
   if (mapLabels) mapLabels.attr("opacity", n => lit(n) ? 1 : 0.2);
+  if (mapEdges) mapEdges.attr("stroke-opacity", l => !b || crossLink(l) ? 1 : 0.1);
   renderList();
   renderTimeline();
 }
@@ -757,9 +761,41 @@ function themeColor(n) {
   return first ? themeSlot(first.name) : "var(--unthemed)";
 }
 
+// Bridge ideas: where interests meet. An idea bridges when it touches two or more themes, by belonging to several
+// or by being connected (any kind of link) to an idea in a theme it isn't in. Strongest first: the most themes
+// touched, then the most cross-theme links, then the score.
+let bridgesOn = false, bridgeCache = null;
+function bridges() {
+  if (bridgeCache?.state === state) return bridgeCache.map;
+  const themesOf = Object.fromEntries(state.graph.nodes.map(n => [n.id, n.themes]));
+  const map = new Map();
+  for (const n of state.graph.nodes) {
+    const touched = new Set(n.themes);
+    let cross = 0;
+    for (const l of state.graph.links) {
+      const other = id(l.source) === n.id ? id(l.target) : id(l.target) === n.id ? id(l.source) : null;
+      if (!other || !themesOf[other]?.length) continue;
+      const theirs = themesOf[other];
+      if (!theirs.some(t => n.themes.includes(t))) cross++;
+      theirs.forEach(t => touched.add(t));
+    }
+    if (touched.size >= 2 && (n.themes.length >= 2 || cross))
+      map.set(n.id, {spans: state.graph.themes.map(t => t.name).filter(t => touched.has(t)), cross,
+                     rank: touched.size * 100 + cross * 10 + (n.score ?? 0)});
+  }
+  bridgeCache = {state, map};
+  return map;
+}
+// A link crosses between themes when its two ideas share none (and both have one).
+const crossLink = l => {
+  const a = state.graph.nodes.find(n => n.id === id(l.source))?.themes || [];
+  const b = state.graph.nodes.find(n => n.id === id(l.target))?.themes || [];
+  return a.length && b.length && !a.some(t => b.includes(t));
+};
+
 let mapMode = store.get("mapmode") === "territories" ? "territories" : "graph";
 let mapNodes = null, drawn = false, shown = null, shownTheme = null, fromTheme = null;
-let mapZoom = null, mapSvg = null, mapBox = null, mapLabels = null;   // to zoom to a theme's ideas
+let mapZoom = null, mapSvg = null, mapBox = null, mapLabels = null, mapEdges = null;   // to zoom to a theme's ideas
 const placed = new Map();   // where each idea was last drawn, so a redraw doesn't scatter the map
 let view = null;            // the zoom, kept across redraws
 
@@ -885,6 +921,7 @@ function drawMap() {
   sim.on("tick", place);   // dragging restarts it
   mapNodes = node;
   mapLabels = shownLabels;
+  mapEdges = edge;
   filter();
 }
 
@@ -945,6 +982,13 @@ function drawTerritories(g, nodes, order, {edge, node, label}) {
     .text(n => short(`${n.starred ? "\u2605 " : ""}${n.title}`));
 }
 
+document.getElementById("bridgebtn").addEventListener("click", e => {
+  bridgesOn = !bridgesOn;
+  e.currentTarget.setAttribute("aria-pressed", bridgesOn);
+  filter();
+  if (!shown && !shownTheme) renderThemes();   // the Bridges section leads the panel while it's on
+});
+
 document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => {
   mapMode = b.dataset.mode;
   store.set("mapmode", mapMode);
@@ -1002,6 +1046,14 @@ function renderThemes() {
           : t.proposed ? " · proposed" : ""}</span></span>` +
       (t.proposed && !t.pinned && !t.rejected ? `<button data-act="pin_theme">Pin</button><button data-act="reject_theme">Reject</button>` : "") +
       `<span class="chev" aria-hidden="true">›</span></div>`).join("");
+  const top = [...bridges()].sort((a, b) => b[1].rank - a[1].rank).slice(0, 10);
+  const bridgeHtml = top.length ? `<h2 class="bridges-h">Bridge ideas</h2><p class="hint">Ideas that connect themes:
+      in more than one, or linked across. Often where your interests meet.</p>` +
+    top.map(([nid, br]) => `<div class="ev"><button class="linkbtn idea-link" data-go="${nid}">${esc(state.ideas[nid]?.title)}</button>` +
+      `<div class="by">${br.spans.map(esc).join(" \u2194 ")}</div></div>`).join("") : "";
+  const body = document.getElementById("panelbody");
+  if (bridgesOn) body.insertAdjacentHTML("afterbegin", bridgeHtml); else body.insertAdjacentHTML("beforeend", bridgeHtml);
+  body.querySelectorAll(".idea-link[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go)));
   document.querySelectorAll(".theme-row button").forEach(b => b.addEventListener("click", async e => {
     e.stopPropagation();
     await act({kind: b.dataset.act, theme_id: b.closest(".theme-row").dataset.id});
@@ -1034,7 +1086,9 @@ function showTheme(themeId) {
     `<p class="meta">${ideas.length} idea${ideas.length === 1 ? "" : "s"}${status ? ` · ${status}` : ""}</p>` +
     ideas.map(n => `<div class="ev"><button class="linkbtn idea-link" data-go="${n.id}">${n.starred ? "★ " : ""}${esc(n.title)}</button>` +
       `<div class="by">${n.score != null ? `score ${n.score.toFixed(2)} · ` : ""}${n.evidence ? `${n.evidence} evidence · ` : ""}` +
-      `${n.origin === "archive" ? "archive" : day(n.last_said)}${isNew(n) ? " · new" : ""}</div></div>`).join("");
+      `${n.origin === "archive" ? "archive" : day(n.last_said)}${isNew(n) ? " \u00b7 new" : ""}` +
+      `${(() => { const o = bridges().get(n.id)?.spans.filter(x => x !== t.name) || [];
+                  return o.length ? ` \u00b7 \u2194 ${o.map(esc).join(", ")}` : ""; })()}</div></div>`).join("");
   body.querySelector("#back").addEventListener("click", renderThemes);
   body.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", async () => {
     await act({kind: b.dataset.act, theme_id: themeId});
@@ -1087,6 +1141,7 @@ function show(ideaId, viaTheme) {
     `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : "Captured from conversation"}` +
     `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
     (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
+    (bridges().has(ideaId) ? `<p class="meta">Bridges ${bridges().get(ideaId).spans.map(esc).join(" \u2194 ")}</p>` : "") +
     (d.ranking ? `<p class="meta">Score ${d.ranking.score.toFixed(2)} · generality ${d.ranking.generality} · ` +
       `novelty ${d.ranking.novelty} · compression ${d.ranking.compression} · ` +
       `interest to a stranger ${d.ranking.outside_value} (of 5)${d.ranking.why ? `<br>${esc(d.ranking.why)}` : ""}</p>` : "") +
