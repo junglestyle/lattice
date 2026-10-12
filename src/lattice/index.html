@@ -50,7 +50,20 @@
   button { cursor: pointer; }
   main { min-height: 0; display: grid; }
   main > section { min-height: 0; display: none; }
-  main[data-view="review"] #review, main[data-view="list"] #list { display: block; overflow: auto; }
+  main[data-view="review"] #review, main[data-view="list"] #list, main[data-view="time"] #timeline {
+    display: block; overflow: auto; }
+  /* Time: one row per idea, a dot for every time it came up, on one shared axis. */
+  #timeline { padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); }
+  #timeline .axis { position: sticky; top: 0; z-index: 1; background: var(--surface-1); display: grid;
+                    grid-template-columns: var(--tl-label) 1fr; border-bottom: 1px solid var(--border); }
+  #timeline .trow { display: grid; grid-template-columns: var(--tl-label) 1fr; align-items: center; gap: 0 12px;
+                    padding: 6px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+  #timeline .trow:hover { background: var(--surface-2); }
+  #timeline .tl { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #timeline .tl .n { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  #timeline svg { display: block; overflow: visible; }
+  #timeline svg text { font-size: 10px; fill: var(--text-muted); }
+  #timeline .intro { color: var(--text-secondary); font-size: 13px; margin: 4px 0 8px; }
   main[data-view="map"] #mapview { display: grid; grid-template-columns: 1fr 380px; }
   header .map-only { display: none; }
   body[data-view="map"] header .map-only { display: flex; }
@@ -76,6 +89,14 @@
   th { color: var(--text-secondary); font-weight: 600; }
   tr.row { cursor: pointer; } tr.row:hover { background: var(--surface-2); }
   svg text { fill: var(--text-secondary); font-size: 11px; pointer-events: none; }
+  svg text.land { fill: var(--text-primary); font-size: 13px; font-weight: 700; paint-order: stroke;
+                  stroke: var(--surface-1); stroke-width: 4px; stroke-linejoin: round; }
+  svg text.spot { font-size: 11px; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; }
+  .seg { gap: 0; }
+  .seg button { border-radius: 0; padding: 4px 10px; }
+  .seg button:first-child { border-radius: 6px 0 0 6px; }
+  .seg button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
+  .seg button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   .tip { position: fixed; pointer-events: none; background: var(--surface-2); color: var(--text-primary);
          border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; max-width: 320px;
          display: none; }
@@ -174,6 +195,9 @@
     #panelbody { flex: 1; overflow: auto; padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
                  overscroll-behavior: contain; }
     #panel[data-sheet="peek"] #panelbody { display: none; }
+    #timeline .trow, #timeline .axis { grid-template-columns: 1fr; }
+    #timeline .axis .pad { display: none; }
+    #timeline .tl { white-space: normal; font-size: 14px; margin-bottom: 2px; }
     /* The list as cards: the title on its own line, then score, themes, evidence and when, small. */
     #list { padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); }
     #list thead { display: none; }
@@ -194,12 +218,15 @@
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="review">Review <span class="badge" id="badge"></span></button>
     <button role="tab" data-tab="map">Map</button>
+    <button role="tab" data-tab="time">Time</button>
     <button role="tab" data-tab="list">List</button>
   </nav>
   <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas"
          style="display:none">
   <button class="status" id="status" aria-haspopup="true" aria-expanded="false"></button>
   <span class="sync" id="sync" role="status"></span>
+  <span class="seg map-only" role="group" aria-label="Map style"><button data-mode="graph">Graph</button><button
+    data-mode="territories">Territories</button></span>
   <span class="counts map-only" id="counts"></span>
   <button class="newbtn" id="newbtn" aria-pressed="false" hidden></button>
   <button id="legendbtn" aria-expanded="false">Legend</button>
@@ -211,6 +238,7 @@
     <div id="sheetbar"><span class="grip" aria-hidden="true"></span><span id="sheettitle">Themes</span>
       <button id="sheetsize" aria-label="Expand">⤢</button><button id="sheetclose" aria-label="Lower">✕</button></div>
     <div id="panelbody"></div></aside></section>
+  <section id="timeline"></section>
   <section id="list"></section>
 </main>
 <div class="tip" id="tip"></div>
@@ -422,6 +450,7 @@ function setTab(tab) {
   document.getElementById("search").style.display = tab === "review" ? "none" : "";
   store.set("tab", tab);
   if (tab === "map") drawMap();
+  if (tab === "time") renderTimeline();
 }
 document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
@@ -661,13 +690,74 @@ function filter() {
   if (mapNodes) mapNodes.attr("opacity", n => lit(n) ? 1 : 0.15);
   if (mapLabels) mapLabels.attr("opacity", n => lit(n) ? 1 : 0.2);
   renderList();
+  renderTimeline();
 }
 document.getElementById("search").addEventListener("input", filter);
+
+// --- Time ------------------------------------------------------------------------------------------------
+// What keeps coming back: one row per idea that has captures, a dot for each time it came up (colored by theme),
+// all on one axis from the first capture to today. Recurring puts the ideas said most often first; Most recent,
+// the ones said lately.
+
+function renderTimeline() {
+  if (document.body.dataset.view !== "time" || !state) return;
+  const box = document.getElementById("timeline");
+  const phone = matchMedia("(max-width: 760px)").matches;
+  const rows = state.graph.nodes.filter(hit).map(n => ({n, ts: (state.ideas[n.id]?.evidence || [])
+      .map(e => ({t: Date.parse(e.said_at), e})).sort((a, b) => a.t - b.t)}))
+    .filter(r => r.ts.length);
+  const recurring = (store.get("tsort") || "recurring") === "recurring";
+  const last = r => r.ts[r.ts.length - 1].t;
+  rows.sort(recurring ? (a, b) => b.ts.length - a.ts.length || last(b) - last(a) : (a, b) => last(b) - last(a));
+  const label = phone ? 0 : 300;
+  box.style.setProperty("--tl-label", phone ? "1fr" : `${label}px`);
+  const W = Math.max(160, box.clientWidth - 32 - (phone ? 0 : label + 12)), R = 5;
+  const all = rows.flatMap(r => r.ts.map(x => x.t));
+  if (!all.length) { box.innerHTML = `<p class="intro">No captured ideas match.</p>`; return; }
+  const x = d3.scaleTime().domain([Math.min(...all), Date.now()]).range([R, W - R]).nice();
+  const fmt = d3.timeFormat("%b %-d");
+  const ticks = x.ticks(phone ? 4 : 8);
+  const say = e => `${day(e.said_at)} \u00b7 ${e.said_by}: \u201c${e.quote.length > 140 ? e.quote.slice(0, 139) + "\u2026" : e.quote}\u201d`;
+  box.innerHTML = `<p class="chips" role="group" aria-label="Order">` +
+      `<button data-tsort="recurring" aria-pressed="${recurring}">Recurring</button>` +
+      `<button data-tsort="recent" aria-pressed="${!recurring}">Most recent</button></p>` +
+    `<p class="intro">Each dot is a time the idea came up, colored by theme. ${rows.length} ideas with captures.</p>` +
+    `<div class="axis"><span class="pad"></span><svg width="${W}" height="20" aria-hidden="true">` +
+      ticks.map(t => `<text x="${x(t)}" y="14" text-anchor="middle">${fmt(t)}</text>`).join("") + `</svg></div>` +
+    rows.map(({n, ts}) => `<div class="trow" data-id="${n.id}">` +
+      `<div class="tl">${n.starred ? "\u2605 " : ""}${esc(n.title)} <span class="n">\u00b7 ${ts.length}</span>` +
+        `${isNew(n) ? ' <span class="tag">new</span>' : ""}</div>` +
+      `<svg width="${W}" height="${2 * R + 4}" role="img" aria-label="${esc(n.title)}: said ${ts.length} times">` +
+        ticks.map(t => `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${2 * R + 4}" stroke="var(--border)"/>`).join("") +
+        `<line x1="${x(ts[0].t)}" x2="${x(ts[ts.length - 1].t)}" y1="${R + 2}" y2="${R + 2}" stroke="var(--edge)"/>` +
+        ts.map(({t, e}) => `<circle cx="${x(t)}" cy="${R + 2}" r="${R}" style="fill:${themeColor(n)}" stroke="var(--surface-1)">` +
+          `<title>${esc(say(e))}</title></circle>`).join("") +
+      `</svg></div>`).join("");
+  box.querySelectorAll("[data-tsort]").forEach(b => b.addEventListener("click", () => {
+    store.set("tsort", b.dataset.tsort); renderTimeline();
+  }));
+  box.querySelectorAll(".trow").forEach(r => r.addEventListener("click", () => { setTab("map"); show(r.dataset.id); }));
+}
+addEventListener("resize", () => { clearTimeout(renderTimeline.t); renderTimeline.t = setTimeout(renderTimeline, 150); });
 
 // Size is the idea's weight: its evidence, and a star counts as two more pieces.
 const weight = n => n.evidence + (n.starred ? 2 : 0);
 const radius = n => 5 + 3 * Math.sqrt(weight(n));
 
+// Themes take the 8 categorical slots in the server's stable order (pinned first, then oldest), so a theme keeps
+// its color as the lattice grows. Themes past the eighth share the neutral "other" color, and an idea in several
+// themes takes the color of the first in that same order.
+const SLOTS = 8;
+function themeSlot(name) {
+  const i = state.graph.themes.findIndex(t => t.name === name);
+  return i >= 0 && i < SLOTS ? `var(--series-${i + 1})` : "var(--unthemed)";
+}
+function themeColor(n) {
+  const first = state.graph.themes.find(t => n.themes.includes(t.name));
+  return first ? themeSlot(first.name) : "var(--unthemed)";
+}
+
+let mapMode = store.get("mapmode") === "territories" ? "territories" : "graph";
 let mapNodes = null, drawn = false, shown = null, shownTheme = null, fromTheme = null;
 let mapZoom = null, mapSvg = null, mapBox = null, mapLabels = null;   // to zoom to a theme's ideas
 const placed = new Map();   // where each idea was last drawn, so a redraw doesn't scatter the map
@@ -683,21 +773,19 @@ function drawMap() {
   if (drawn || !state) return;
   drawn = true;
   const {nodes, links, themes} = state.graph;
-  // Themes take the 8 categorical slots in the server's stable order (pinned first, then oldest), so a theme
-  // keeps its color as the lattice grows. Themes past the eighth share the neutral "other" color.
   const order = themes.map(t => t.name);
-  const MAX = 8;
-  const slot = name => { const i = order.indexOf(name); return i >= 0 && i < MAX ? `var(--series-${i + 1})` : "var(--unthemed)"; };
-  // An idea in several themes takes the color of the first in that same stable order.
-  const color = n => { const mine = order.filter(name => n.themes.includes(name)); return mine.length ? slot(mine[0]) : "var(--unthemed)"; };
+  const slot = themeSlot, color = themeColor;
+  const territories = mapMode === "territories";
+  document.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === mapMode));
   document.getElementById("legend").innerHTML =
-    themes.slice(0, MAX).map(t => `<span><i class="sw" style="background:${slot(t.name)}"></i>${esc(t.name)}` +
+    themes.slice(0, SLOTS).map(t => `<span><i class="sw" style="background:${slot(t.name)}"></i>${esc(t.name)}` +
       `${t.proposed && !t.pinned ? " <em>(proposed)</em>" : ""} · ${t.ideas}</span>`).join("") +
-    `<span><i class="sw" style="background:var(--unthemed)"></i>${themes.length > MAX ? "Other or no theme" : "No theme"}</span>` +
+    `<span><i class="sw" style="background:var(--unthemed)"></i>${themes.length > SLOTS ? "Other or no theme" : "No theme"}</span>` +
     `<span><i class="sw" style="border:1.5px dashed var(--text-primary)"></i>new since your last visit</span>` +
+    (territories ? `<span>Each area takes the theme of its nearest idea</span>` :
     `<span><i class="ln"></i>evolves</span><span><i class="ln" style="border-top-style:dashed"></i>archive link</span>` +
     `<span><i class="ln" style="border-top-width:1px;border-color:var(--edge)"></i>related</span>` +
-    `<span><i class="ln" style="border-color:var(--text-primary);border-top-style:dotted"></i>your link</span>`;
+    `<span><i class="ln" style="border-color:var(--text-primary);border-top-style:dotted"></i>your link</span>`);
   if (!shown && !shownTheme) renderThemes();
 
   const degree = Object.fromEntries(nodes.map(n => [n.id, 0]));
@@ -739,7 +827,7 @@ function drawMap() {
       t.textContent = `${n.starred ? "★ " : ""}${n.title}${n.evidence ? ` · ${n.evidence} piece${n.evidence > 1 ? "s" : ""} of evidence` : ""}${isNew(n) ? " · new" : ""}`; })
     .on("mouseleave", () => { document.getElementById("tip").style.display = "none"; })
     .on("click", (e, n) => show(n.id))
-    .call(d3.drag()
+    .call(d3.drag().filter(() => !territories)
       .on("start", (e, n) => { if (!e.active) sim.alphaTarget(0.2).restart(); n.fx = n.x; n.fy = n.y; })
       .on("drag", (e, n) => { n.fx = e.x; n.fy = e.y; })
       .on("end", (e, n) => { if (!e.active) sim.alphaTarget(0); n.fx = null; n.fy = null; }));
@@ -784,6 +872,8 @@ function drawMap() {
   };
   sim.tick(300);   // settle before the first paint, so the map doesn't jiggle into place
   place();
+  let shownLabels = label;
+  if (territories) shownLabels = drawTerritories(g, nodes, order, {edge, node, label});
   if (view) svg.call(zoom.transform, view);
   else {
     // Start zoomed to fit every idea: on a phone the layout is wider than the screen.
@@ -794,9 +884,72 @@ function drawMap() {
   }
   sim.on("tick", place);   // dragging restarts it
   mapNodes = node;
-  mapLabels = label;
+  mapLabels = shownLabels;
   filter();
 }
+
+// Territories: the same places as the graph, read as a map. Every spot near an idea takes the color of the
+// nearest idea's theme (Voronoi cells, clipped to a radius around the ideas so empty ground stays empty), so themes
+// show as countries without overlapping. The edges go, the dots shrink, and only theme names (where each theme is
+// densest) and a few of the best ideas are labelled, pushed apart so they don't collide.
+function drawTerritories(g, nodes, order, {edge, node, label}) {
+  edge.attr("display", "none");
+  label.attr("display", "none");
+  node.attr("r", n => 3 + Math.sqrt(weight(n))).attr("stroke-width", n => n.origin === "archive" ? 1.5 : 1);
+  const reach = 38, pad = 2 * reach;
+  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+  const bounds = [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad];
+  const voronoi = d3.Delaunay.from(nodes, n => n.x, n => n.y).voronoi(bounds);
+  const clip = `lands-${Date.now()}`;
+  g.insert("clipPath", ":first-child").attr("id", clip).selectAll("circle").data(nodes).join("circle")
+    .attr("cx", n => n.x).attr("cy", n => n.y).attr("r", reach);
+  g.insert("g", ":first-child").attr("clip-path", `url(#${clip})`).selectAll("path").data(nodes).join("path")
+    .attr("d", (n, i) => voronoi.renderCell(i)).style("fill", n => themeColor(n))
+    .attr("fill-opacity", n => n.themes.length ? 0.22 : 0.1);
+
+  // Labels: each theme at its densest spot (the idea with the most theme-mates nearby, averaged with them).
+  const spots = [];
+  for (const name of order.slice(0, SLOTS)) {
+    const mine = nodes.filter(n => n.themes.includes(name));
+    if (!mine.length) continue;
+    const near = n => mine.filter(m => Math.hypot(m.x - n.x, m.y - n.y) < 90);
+    const core = near(mine.reduce((best, n) => near(n).length > near(best).length ? n : best, mine[0]));
+    spots.push({kind: "land", text: name, x: d3.mean(core, n => n.x), y: d3.mean(core, n => n.y)});
+  }
+  const phone = matchMedia("(max-width: 760px)").matches;
+  const top = [...nodes].sort((a, b) => b.starred - a.starred || (b.score ?? -1) - (a.score ?? -1) || b.evidence - a.evidence)
+    .slice(0, phone ? 4 : 8);
+  for (const n of top) spots.push({kind: "spot", text: `${n.starred ? "\u2605 " : ""}${n.title}`, x: n.x + 8, y: n.y, n});
+  const short = t => t.length > 28 ? t.slice(0, 27).trimEnd() + "\u2026" : t;
+  // Greedy placement: theme names first, nudged up or down until clear; idea labels only where there's room.
+  const placedBoxes = [];
+  const boxOf = (sp, y) => {
+    const w = short(sp.text).length * (sp.kind === "land" ? 7.6 : 6), h = sp.kind === "land" ? 16 : 13;
+    const x0 = sp.kind === "land" ? sp.x - w / 2 : sp.x;
+    return [x0, y - h + 3, x0 + w, y + 3];
+  };
+  const clear = b => placedBoxes.every(o => b[2] < o[0] || b[0] > o[2] || b[3] < o[1] || b[1] > o[3]);
+  const shown = [];
+  for (const sp of spots) {
+    const tries = sp.kind === "land" ? [0, -18, 18, -36, 36, -54, 54] : [0, -14, 14];
+    const dy = tries.find(d => clear(boxOf(sp, sp.y + d)));
+    if (dy === undefined && sp.kind === "spot") continue;
+    const y = sp.y + (dy ?? 0);
+    placedBoxes.push(boxOf(sp, y));
+    shown.push({...sp, y});
+  }
+  g.append("g").selectAll("text").data(shown.filter(sp => sp.kind === "land")).join("text").attr("class", "land")
+    .attr("x", sp => sp.x).attr("y", sp => sp.y).attr("text-anchor", "middle").text(sp => short(sp.text));
+  return g.append("g").selectAll("text").data(shown.filter(sp => sp.kind === "spot").map(sp => Object.assign(sp.n, {_ly: sp.y})))
+    .join("text").attr("class", "spot").attr("x", n => n.x).attr("y", n => n._ly).attr("dx", 8).attr("dy", 4)
+    .text(n => short(`${n.starred ? "\u2605 " : ""}${n.title}`));
+}
+
+document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => {
+  mapMode = b.dataset.mode;
+  store.set("mapmode", mapMode);
+  redrawMap();
+}));
 
 document.getElementById("legendbtn").addEventListener("click", e => {
   const open = document.getElementById("legend").classList.toggle("open");
@@ -1000,6 +1153,7 @@ function renderAll() {
   renderReview();
   renderCounts();
   renderList();
+  renderTimeline();
   redrawMap();
   if (shown) show(shown); else if (shownTheme) showTheme(shownTheme); else renderThemes();
   renderSync();
@@ -1009,7 +1163,7 @@ function renderAll() {
 
 // #review, #map or #list opens that tab (bookmarkable); otherwise the last one used.
 const fromHash = location.hash.slice(1);
-const firstTab = ["review", "map", "list"].includes(fromHash) ? fromHash : store.get("tab") || "review";
+const firstTab = ["review", "map", "time", "list"].includes(fromHash) ? fromHash : store.get("tab") || "review";
 
 (async () => {
   [snap, pending] = [await idb.get("snapshot"), (await idb.get("pending")) || []];
