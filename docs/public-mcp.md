@@ -18,9 +18,19 @@ app, the snapshot and the review queue stay tailnet-only, because the public lis
 4. **What goes out** is what the tailnet MCP endpoint gives: ideas, themes, quotes with speakers pseudonymized
    ("me", "unknown", S1, S2...), as in Idea Machine's policy B. Writes are only star, link and note.
 
-What's different from the tailnet:
-- Cloudflare terminates TLS, so it sees this traffic in plain text, and its request logs hold the URL, secret included.
-- A leaked URL works from anyone's Claude until you rotate the secret.
+Read this before turning it on. It reverses the rule in Idea Machine's `install/compose.yaml` ("never the LAN,
+never 0.0.0.0, never tailscale funnel") for this one endpoint:
+- **The secret in the path is the only real authentication.** `160.79.104.0/21` is all of Anthropic's outbound
+  traffic, every Claude user's connectors included, not just yours. Anyone who has the URL can use it from their own
+  Claude.
+- **That includes the write tools.** Whoever has the URL can read every idea and quote (speakers pseudonymized),
+  and can star, link and set notes. Those writes are feedback events marked `source = 'mcp'`, so they can be found
+  and deleted, but they'd steer Idea Machine until then.
+- **A path leaks more easily than a header.** The URL sits in Cloudflare's request logs, cloudflared's logs, any
+  proxy in between, connector settings and screenshots. Lattice itself never logs requests.
+- Cloudflare terminates TLS, so it sees this traffic in plain text.
+
+OAuth would replace the path secret with a login that never sits in a URL, and it's the way to make this solid.
 
 ## Set it up (on the NAS)
 
