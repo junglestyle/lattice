@@ -64,6 +64,19 @@
   #timeline svg { display: block; overflow: visible; }
   #timeline svg text { font-size: 10px; fill: var(--text-muted); }
   #timeline .intro { color: var(--text-secondary); font-size: 13px; margin: 4px 0 8px; }
+  /* The weekly digest: one week at a time, its points as cards. */
+  .digest { max-width: 680px; }
+  .dnav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 8px; }
+  .dnav b { font-size: 16px; }
+  .dsum { font-size: 15px; line-height: 1.45; margin: 0 0 14px; }
+  .point { border-top: 1px solid var(--border); padding: 12px 0; }
+  .point h3 { font-size: 16px; margin: 6px 0 4px; }
+  .point p { margin: 0 0 8px; line-height: 1.45; color: var(--text-secondary); }
+  .point .ideas { display: flex; flex-wrap: wrap; gap: 6px; }
+  .point .ideas button { border-radius: 999px; padding: 3px 10px; font-size: 13px; text-align: left; }
+  .point .prow { display: flex; gap: 8px; margin-top: 8px; }
+  .point .prow button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
+  .point.dismissed h3, .point.dismissed p { opacity: 0.55; }
   main[data-view="map"] #mapview { display: grid; grid-template-columns: 1fr 380px; }
   header .map-only { display: none; }
   body[data-view="map"] header .map-only { display: flex; }
@@ -225,7 +238,7 @@
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="review">Review <span class="badge" id="badge"></span></button>
     <button role="tab" data-tab="map">Map</button>
-    <button role="tab" data-tab="time">Time</button>
+    <button role="tab" data-tab="time">Time <span class="badge" id="tbadge"></span></button>
     <button role="tab" data-tab="list">List</button>
   </nav>
   <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas"
@@ -316,6 +329,9 @@ function applyEvent(st, e) {
   } else if (e.kind.endsWith("_theme")) {
     const t = st.graph.themes.find(t => t.id === e.theme_id);
     if (t) e.kind === "reject_theme" ? t.rejected = true : t.pinned = e.kind === "pin_theme";
+  } else if (e.kind === "digest_star" || e.kind === "digest_dismiss") {
+    const p = (st.digests || []).find(d => d.id === e.digest_id)?.points.find(p => p.point === e.point);
+    if (p) p.mine = e.kind.slice(7);
   } else if (e.kind === "idea_compare") {
     st.compared = [...(st.compared || []), [e.idea_id, e.other_idea_id].sort()];
   } else if (e.kind === "link" || e.kind === "unlink") {
@@ -879,7 +895,10 @@ function renderTimeline() {
   const rows = state.graph.nodes.filter(hit).map(n => ({n, ts: (state.ideas[n.id]?.evidence || [])
       .map(e => ({t: Date.parse(e.said_at), e})).sort((a, b) => a.t - b.t)}))
     .filter(r => r.ts.length);
-  const recurring = (store.get("tsort") || "recurring") === "recurring";
+  const sort = store.get("tsort") || (state.digests?.length ? "week" : "recurring");
+  renderDigestBadge();
+  if (sort === "week") { renderDigest(box); return; }
+  const recurring = sort === "recurring";
   const last = r => r.ts[r.ts.length - 1].t;
   rows.sort(recurring ? (a, b) => b.ts.length - a.ts.length || last(b) - last(a) : (a, b) => last(b) - last(a));
   const label = phone ? 0 : 300;
@@ -892,6 +911,7 @@ function renderTimeline() {
   const ticks = x.ticks(phone ? 4 : 8);
   const say = e => `${day(e.said_at)} \u00b7 ${e.said_by}: \u201c${e.quote.length > 140 ? e.quote.slice(0, 139) + "\u2026" : e.quote}\u201d`;
   box.innerHTML = `<p class="chips" role="group" aria-label="Order">` +
+      `<button data-tsort="week" aria-pressed="false">Week</button>` +
       `<button data-tsort="recurring" aria-pressed="${recurring}">Recurring</button>` +
       `<button data-tsort="recent" aria-pressed="${!recurring}">Most recent</button></p>` +
     `<p class="intro">Each dot is a time the idea came up, colored by theme. ${rows.length} ideas with captures.</p>` +
@@ -911,6 +931,61 @@ function renderTimeline() {
   }));
   box.querySelectorAll(".trow").forEach(r => r.addEventListener("click", () => { setTab("map"); show(r.dataset.id); }));
 }
+// --- The weekly digest -------------------------------------------------------------------------------------
+// Idea Machine's weekly read of what the lattice gained (pub.digests): what kept coming up, what converges, sleepers,
+// projects forming, what a stranger would value. Each point cites its ideas (tap one for the map) and takes ★ (worth
+// surfacing) or "Not useful": digest_star / digest_dismiss, the latest wins. A digest can vanish if its speech is
+// forgotten, so the week shown falls back to the newest.
+
+const KIND = {recurring: "Keeps coming up", convergence: "Converging", sleeper: "Sleeper", project: "Project forming",
+              outside_value: "Worth sharing"};
+let digestWeek = null;   // week_start shown; null: the newest
+
+function renderDigestBadge() {
+  const newest = state.digests?.[0];
+  document.getElementById("tbadge").textContent = newest && newest.id > +(store.get("digest-seen") || 0) ? "\u2022" : "";
+}
+
+function renderDigest(box) {
+  const ds = state.digests || [];
+  const at = Math.max(0, ds.findIndex(d => d.week_start === digestWeek));
+  const d = ds[at];
+  const chips = `<p class="chips" role="group" aria-label="Order"><button data-tsort="week" aria-pressed="true">Week</button>` +
+    `<button data-tsort="recurring" aria-pressed="false">Recurring</button>` +
+    `<button data-tsort="recent" aria-pressed="false">Most recent</button></p>`;
+  if (!d) {
+    box.innerHTML = chips + `<p class="intro">Each Monday Idea Machine writes a digest of the week before: what kept
+      coming up, what converges, what matters more than it seemed. None yet.</p>`;
+  } else {
+    if (at === 0) { store.set("digest-seen", String(d.id)); renderDigestBadge(); }
+    const start = new Date(d.week_start + "T00:00"), end = new Date(start.getTime() + 6 * 864e5);
+    const span = `${day(start.toISOString())} \u2013 ${day(end.toISOString())}`;
+    box.innerHTML = chips + `<div class="digest">
+      <div class="dnav"><button id="d-prev" ${at >= ds.length - 1 ? "disabled" : ""}>\u2039 Earlier</button>
+        <b>${span}</b><button id="d-next" ${at === 0 ? "disabled" : ""}>Later \u203a</button></div>
+      <p class="dsum">${esc(d.summary)}</p>
+      ${d.points.map(p => `<article class="point${p.mine === "dismiss" ? " dismissed" : ""}">
+        <span class="tag">${esc(KIND[p.kind] || p.kind)}</span>
+        <h3>${p.mine === "star" ? "\u2605 " : ""}${esc(p.title)}</h3><p>${esc(p.body)}</p>
+        <div class="ideas">${p.idea_ids.filter(i => state.ideas[i]).map(i =>
+          `<button data-go="${i}">${esc(state.ideas[i].title)}</button>`).join("")}</div>
+        <div class="prow"><button data-p="${p.point}" data-r="digest_star" aria-pressed="${p.mine === "star"}">\u2605 Worth it</button>
+          <button data-p="${p.point}" data-r="digest_dismiss" aria-pressed="${p.mine === "dismiss"}">Not useful</button></div>
+      </article>`).join("")}</div>`;
+    box.querySelector("#d-prev").addEventListener("click", () => { digestWeek = ds[at + 1].week_start; renderTimeline(); });
+    box.querySelector("#d-next").addEventListener("click", () => { digestWeek = ds[at - 1].week_start; renderTimeline(); });
+    box.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => { setTab("map"); show(b.dataset.go); }));
+    box.querySelectorAll("[data-r]").forEach(b => b.addEventListener("click", async () => {
+      if (b.getAttribute("aria-pressed") === "true") return;
+      await act({kind: b.dataset.r, digest_id: d.id, point: +b.dataset.p});
+      renderTimeline();
+    }));
+  }
+  box.querySelectorAll("[data-tsort]").forEach(b => b.addEventListener("click", () => {
+    store.set("tsort", b.dataset.tsort); renderTimeline();
+  }));
+}
+
 addEventListener("resize", () => { clearTimeout(renderTimeline.t); renderTimeline.t = setTimeout(renderTimeline, 150); });
 
 // Size is the idea's weight: its evidence, and a star counts as two more pieces.
@@ -1378,6 +1453,7 @@ function renderAll() {
   renderCounts();
   renderList();
   renderTimeline();
+  renderDigestBadge();
   redrawMap();
   if (shown) show(shown); else if (shownTheme) showTheme(shownTheme); else renderThemes();
   renderSync();

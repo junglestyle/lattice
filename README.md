@@ -23,6 +23,9 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   run out, **compare ideas** two at a time ("which is better?", `idea_compare` events): a steadier signal for Idea
   Machine's ranking than keep and discard. Idea Machine picks the pairs (`pub.compare_pairs`); without them,
   neighbouring scores or a shared theme. The order shown is random and recorded.
+- **Week** (in the Time tab): Idea Machine's weekly digest (`pub.digests`): a summary, then points (what keeps
+  coming up, what converges, sleepers, projects forming, what a stranger would value), each with its ideas as chips
+  that open the map, and ★ Worth it / Not useful (`digest_star` / `digest_dismiss`). A dot on the tab marks a new one.
 - **Map**: ideas laid out by meaning (`pub.idea_positions`, a 2D projection Idea Machine keeps stable), colored by
   theme, sized by weight (evidence, and a star counts for two), with connections. Tap an idea for its evidence:
   star it, correct it, link it to another idea, or keep / discard its captures in place. Tap a theme to see what
@@ -44,7 +47,7 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
   `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, `compare_pair`, `review_digest`, and, when you
   ask, `star_idea`, `link_ideas`, `note_idea`, `record_comparison`, `decide_item` (your verdict on a spot check) and
-  `keep_rest` (the rest, in bulk), plus `look_again` (kept unread, now mattering; `whats_new` counts them). "Let's
+  `keep_rest` (the rest, in bulk), `weekly_digest` / `rate_digest_point`, plus `look_again` (kept unread, now mattering; `whats_new` counts them). "Let's
   catch up on review" works by voice.
   It takes the Lattice token as a bearer header and is tailnet-only like the rest. For claude.ai and the phone
   app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",

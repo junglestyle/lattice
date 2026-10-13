@@ -204,7 +204,23 @@ def snapshot(conn) -> dict:
     """Everything the app shows, in one piece. The device replaces its copy with this on every sync, so what Idea
     Machine forgets is gone from the phone too."""
     return {"graph": graph(conn), "ideas": details(conn), "review": review(conn, limit=500), "status": status(conn),
-            "pairs": compare_pairs(conn), "compared": compared(conn)}
+            "pairs": compare_pairs(conn), "compared": compared(conn), "digests": digests(conn)}
+
+
+def digests(conn, week: str | None = None) -> list[dict]:
+    """Idea Machine's weekly digests (pub.digests, slice 6), newest first; or the one for the week holding `week`
+    (an ISO date). Each point: kind, title, body, idea_ids, and mine ('star', 'dismiss' or None). A digest can vanish
+    between syncs: forgetting any speech behind it deletes it whole."""
+    try:
+        rows = conn.execute(
+            """SELECT digest_id, week_start, period_start, period_end, summary, written_at, points FROM pub.digests
+               WHERE %(week)s::date IS NULL OR week_start = date_trunc('week', %(week)s::date)::date
+               ORDER BY week_start DESC""", {"week": week}).fetchall()
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        return []
+    return [{"id": i, "week_start": w.isoformat(), "period_start": a.isoformat(), "period_end": b.isoformat(),
+             "summary": s, "written_at": at.isoformat(), "points": list(p or [])}
+            for i, w, a, b, s, at, p in rows]
 
 
 def review(conn, limit: int = 50) -> dict:
@@ -246,7 +262,8 @@ def audit(items: list[dict], n: int = AUDIT) -> list[str]:
 EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_id",
           "star": "idea_id", "unstar": "idea_id", "idea_correct": "idea_id", "idea_note": "idea_id",
           "pin_theme": "theme_id", "unpin_theme": "theme_id", "reject_theme": "theme_id",
-          "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id"}
+          "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id",
+          "digest_star": None, "digest_dismiss": None}   # a digest point: payload digest_id and point
 WINNERS = ("first", "second", "tie")
 
 
@@ -260,6 +277,8 @@ def record(conn, event: dict, source: str = "lattice") -> int:
     if kind not in EVENTS:
         raise ValueError(f"unknown kind {kind!r}")
     target = EVENTS[kind]
+    if target is None:   # a digest point, named by numbers rather than an id column
+        return _record_digest(conn, kind, event, source)
     ref = str(UUID(str(event.get(target, ""))))   # ValueError unless it's a UUID
     payload = {}
     if kind.startswith("item_") and str(event.get("note") or "").strip():   # why I kept, starred or discarded it
@@ -292,6 +311,24 @@ def record(conn, event: dict, source: str = "lattice") -> int:
             (kind, ref, other, json.dumps(payload), source)).fetchone()[0]
     except psycopg.errors.CheckViolation as e:
         # Only an unknown kind is worth retrying; any other check means the event itself is wrong, and always will be.
+        if e.diag.constraint_name == "feedback_events_kind_check":
+            raise NotYet(f"Idea Machine doesn't accept {kind} events yet") from None
+        raise ValueError(f"Idea Machine refused the event ({e.diag.constraint_name})") from None
+
+
+def _record_digest(conn, kind: str, event: dict, source: str) -> int:
+    payload = {}
+    for k in ("digest_id", "point"):
+        v = event.get(k)
+        if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+            raise ValueError(f"{k} must be a positive whole number")
+        payload[k] = v
+    if str(event.get("note") or "").strip():
+        payload["note"] = str(event["note"]).strip()[:500]
+    try:
+        return conn.execute("INSERT INTO pub.feedback_events (kind, payload, source) VALUES (%s, %s, %s) RETURNING event_id",
+                            (kind, json.dumps(payload), source)).fetchone()[0]
+    except psycopg.errors.CheckViolation as e:
         if e.diag.constraint_name == "feedback_events_kind_check":
             raise NotYet(f"Idea Machine doesn't accept {kind} events yet") from None
         raise ValueError(f"Idea Machine refused the event ({e.diag.constraint_name})") from None

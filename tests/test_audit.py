@@ -123,3 +123,27 @@ def test_look_again_by_conversation(url, admin, monkeypatch):
     assert all(c["why"] and c["said_by"] not in names for c in result["captures"])
     reasons = [len(c["why"]) for c in result["captures"]]
     assert reasons == sorted(reasons, reverse=True)
+
+
+@needs_db
+def test_the_weekly_digest(url, admin):
+    snap = json.loads(request(url + "/api/snapshot", login(url))[2])
+    if not snap.get("digests"):
+        pytest.skip("no weekly digest in this database")
+    d = snap["digests"][0]
+    assert d["summary"] and all({"point", "kind", "title", "body", "idea_ids", "mine"} <= set(p) for p in d["points"])
+    got = tool(url, "weekly_digest", week=d["week_start"])["structuredContent"]
+    assert got["digest_id"] == d["id"] and len(got["points"]) == len(d["points"])
+    assert tool(url, "weekly_digest", week="1999-01-01")["isError"]
+    assert tool(url, "rate_digest_point", digest_id=d["id"], point=1, rating="meh")["isError"]
+    for bad in [{"kind": "digest_star", "digest_id": "1", "point": 1}, {"kind": "digest_star", "digest_id": d["id"]},
+                {"kind": "digest_dismiss", "digest_id": True, "point": 1}]:
+        assert post(url + "/api/feedback", login(url), bad)[0] == 400, bad
+    before = admin.execute("SELECT coalesce(max(event_id), 0) FROM pub.feedback_events").fetchone()[0]
+    try:
+        assert not tool(url, "rate_digest_point", digest_id=d["id"], point=1, rating="dismiss", note="obvious").get("isError")
+        status, _ = post(url + "/api/feedback", login(url), {"kind": "digest_star", "digest_id": d["id"], "point": 1})
+        assert status == 201
+        assert tool(url, "weekly_digest")["structuredContent"]["points"][0]["owner_said"] == "star"   # latest wins
+    finally:
+        admin.execute("DELETE FROM pub.feedback_events WHERE event_id > %s AND kind LIKE 'digest_%%'", (before,))

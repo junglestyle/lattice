@@ -207,6 +207,38 @@ def look_again(conn, limit: int = 5) -> dict:
                    "(spot_check=false). Keeping it again is fine; a discard is the useful signal, with a reason."}
 
 
+def weekly_digest(conn, week: str | None = None) -> dict:
+    if week:
+        try:
+            week = datetime.fromisoformat(str(week)).date().isoformat()
+        except ValueError:
+            raise ToolError("week must be an ISO date in the week you want, e.g. 2026-09-30") from None
+    found = data.digests(conn, week)
+    if not found:
+        raise ToolError("no digest for that week" if week else "Idea Machine hasn't written a weekly digest yet")
+    d = found[0]
+    ids = list({i for p in d["points"] for i in p["idea_ids"]})
+    titles = {str(i): t for i, t in conn.execute("SELECT idea_id, title FROM pub.ideas WHERE idea_id = ANY(%s::uuid[])",
+                                                 (ids,))}
+    weeks = [x["week_start"] for x in data.digests(conn)]
+    return {"digest_id": d["id"], "week_start": d["week_start"], "summary": d["summary"],
+            "points": [{"point": p["point"], "kind": p["kind"], "title": p["title"], "body": p["body"],
+                        "ideas": [{"id": i, "title": titles[i]} for i in p["idea_ids"] if i in titles],
+                        "owner_said": p["mine"]} for p in d["points"]],
+            "other_weeks": [w for w in weeks if w != d["week_start"]]}
+
+
+def rate_digest_point(conn, digest_id: int, point: int, rating: str, note: str = "") -> dict:
+    if rating not in ("star", "dismiss"):
+        raise ToolError("rating must be star or dismiss")
+    try:
+        data.record(conn, {"kind": f"digest_{rating}", "digest_id": digest_id, "point": point, "note": note},
+                    source="mcp")
+    except data.NotYet:
+        raise ToolError("Idea Machine doesn't accept digest ratings yet") from None
+    return {"digest_id": digest_id, "point": point, "rating": rating}
+
+
 VERDICTS = {"keep": "item_keep", "star": "item_star", "discard": "item_discard"}
 
 
@@ -297,6 +329,17 @@ TOOLS = {
                    "out to matter (linked, evolving, echoing the archive, bridging themes, compared, said again), "
                    "for a real verdict. Use after the spot checks or when the owner asks what's worth a second look.",
                    {"limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5}}, []),
+    "weekly_digest": (weekly_digest, True, "Idea Machine's weekly digest of the owner's lattice: a summary and "
+                      "points (what kept coming up, what converges, sleepers, projects forming, what a stranger would "
+                      "value), each with the ideas it rests on. The latest week, or the one holding a date. Its text is "
+                      "written for the owner from idea text and may name people (it isn't pseudonymized like quotes).",
+                      {"week": {"type": "string", "description": "An ISO date in the week wanted"}}, []),
+    "rate_digest_point": (rate_digest_point, False, "Record the owner's response to a digest point: star (worth "
+                          "surfacing) or dismiss (not useful). Only when the owner says; the latest response wins.",
+                          {"digest_id": {"type": "integer"}, "point": {"type": "integer", "minimum": 1},
+                           "rating": {"type": "string", "enum": ["star", "dismiss"]},
+                           "note": {"type": "string", "maxLength": 500, "description": "Why, if the owner said"}},
+                          ["digest_id", "point", "rating"]),
     "decide_item": (decide_item, False, "Record the owner's own verdict on one capture (a spot check, or any item "
                     "they chose to judge). Never decide for them.",
                     {"item_id": {"type": "string", "description": "A capture's item_id from review_digest"},
