@@ -482,14 +482,22 @@ let cardId;   // the capture (or "batch:n") on screen; a sync redraws it only wh
 // Any I untick stay in the queue for me. My default is to keep: the value comes as the lattice grows.
 let oneByOne = false;   // this visit, I chose to go through them all
 const mine = new Set((() => { try { return JSON.parse(store.get("judge-myself")) || []; } catch { return []; } })());
-const spot = () => new Set(state.review.audit || []);
+// The spot checks I was shown, remembered once I keep the rest: picking again from what's left would draw on the
+// ones I chose to judge myself, and their verdicts aren't the unbiased sample ({"audit": true}) Idea Machine trusts.
+const shownChecks = () => { try { return JSON.parse(store.get("spot-checks")) || []; } catch { return []; } };
+const live = () => new Set(state.review.items.map(i => i.id));
+const spot = () => {
+  const kept = shownChecks().filter(id => live().has(id));
+  return new Set(kept.length ? kept : state.review.audit || []);
+};
 const rest = () => state.review.items.filter(i => !spot().has(i.id));
 const bulkable = () => rest().filter(i => !mine.has(i.id));
 const showBatch = () => !oneByOne && !comparing && bulkable().length > 0;
 
 // Spot checks first, lowest confidence first; then the rest, most confident first.
 function queue() {
-  const at = new Map((state.review.audit || []).map((id, n) => [id, n]));
+  const conf = new Map(state.review.items.map(i => [i.id, i.confidence]));
+  const at = new Map([...spot()].sort((a, b) => conf.get(a) - conf.get(b)).map((id, n) => [id, n]));
   return [...state.review.items].sort((a, b) => (at.get(a.id) ?? Infinity) - (at.get(b.id) ?? Infinity));
 }
 
@@ -523,13 +531,13 @@ function renderBatch() {
   label();
   box.querySelectorAll(".rest input").forEach(c => c.addEventListener("change", () => {
     c.checked ? mine.delete(c.dataset.id) : mine.add(c.dataset.id);
-    const live = new Set(state.review.items.map(i => i.id));
-    store.set("judge-myself", JSON.stringify([...mine].filter(id => live.has(id))));
+    store.set("judge-myself", JSON.stringify([...mine].filter(id => live().has(id))));
     label();
   }));
   box.querySelector("#b-one").addEventListener("click", () => { oneByOne = true; renderCard(); });
   keepBtn.addEventListener("click", async () => {
     const keep = bulkable();
+    store.set("spot-checks", JSON.stringify([...spot()]));
     await actAll(keep.map(i => ({kind: "item_keep", item_id: i.id, bulk: true})));
     toast(`Kept ${keep.length}`);
     renderCard();
@@ -606,8 +614,8 @@ function renderCard() {
   if (showBatch()) { renderBatch(); return; }
   const item = queue()[0];
   cardId = item?.id;
-  const check = (state.review.audit || []).indexOf(item?.id);
-  const isCheck = check >= 0 && snap.review.total > snap.review.audit?.length;
+  const checks = queue().filter(i => spot().has(i.id)).map(i => i.id), check = checks.indexOf(item?.id);
+  const isCheck = check >= 0 && (shownChecks().some(id => live().has(id)) || snap.review.total > snap.review.audit?.length);
   if (!item && comparing) { renderCompare(); return; }
   if (!item) {
     box.innerHTML = `<div class="done"><p>${state.review.total ? "That's all this device holds; more on the next sync."
@@ -618,7 +626,7 @@ function renderCard() {
     return;
   }
   box.innerHTML = `<article class="card">
-      <div class="meta">${isCheck ? `<span>spot check ${check + 1} of ${state.review.audit.length}</span>` : ""}
+      <div class="meta">${isCheck ? `<span>spot check, ${checks.length} left</span>` : ""}
         <span>${esc(item.kind)}</span><span>${esc(item.said_by)}</span>
         <span>${when(item.said_at)}</span><span>confidence ${Math.round(item.confidence * 100)}%</span></div>
       <p class="quote">“${esc(item.quote)}”</p>
@@ -702,7 +710,7 @@ function editor(host, idea, onSaved) {
 async function decide(kind, note) {
   const item = queue()[0];
   if (!item) return;
-  await act({kind, item_id: item.id, note: note || undefined});
+  await act({kind, item_id: item.id, note: note || undefined, audit: spot().has(item.id) || undefined});
   toast({item_keep: "Kept", item_star: "Starred", item_discard: "Discarded"}[kind]);
   renderCard();
 }

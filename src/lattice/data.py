@@ -210,6 +210,8 @@ def record(conn, event: dict, source: str = "lattice") -> int:
         payload["note"] = str(event["note"]).strip()[:500]
     if kind == "item_keep" and event.get("bulk") is True:   # kept with the rest after an audit, not read one by one
         payload["bulk"] = True
+    elif kind.startswith("item_") and event.get("audit") is True:   # a spot check: the unbiased sample by confidence
+        payload["audit"] = True
     elif kind == "idea_correct":   # my wording; an empty field reverts to Claude's
         payload = {k: str(event[k]).strip()[:limit] for k, limit in (("title", 120), ("statement", 1000)) if k in event}
         if not payload:

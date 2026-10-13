@@ -189,18 +189,19 @@ def review_digest(conn) -> dict:
                      "items": [{"item_id": i["id"], "kind": i["kind"], "gist": i["gist"],
                                 "idea": i["idea"]["title"] if i["idea"] else None} for i in rest]},
             "how": "Spot checks are spread across Idea Machine's confidence, lowest first. Read each to the owner "
-                   "and record what they say with decide_item. Then offer to keep the rest: if they want to judge "
+                   "and record what they say with decide_item(spot_check=true). Then offer to keep the rest: if they want to judge "
                    "some of them themselves, leave those out of keep_rest's item_ids."}
 
 
 VERDICTS = {"keep": "item_keep", "star": "item_star", "discard": "item_discard"}
 
 
-def decide_item(conn, item_id: str, verdict: str, note: str = "") -> dict:
+def decide_item(conn, item_id: str, verdict: str, note: str = "", spot_check: bool = False) -> dict:
     if verdict not in VERDICTS:
         raise ToolError("verdict must be keep, star or discard")
-    data.record(conn, {"kind": VERDICTS[verdict], "item_id": _uuid(item_id, "item_id"), "note": note}, source="mcp")
-    return {"item_id": item_id, "verdict": verdict}
+    data.record(conn, {"kind": VERDICTS[verdict], "item_id": _uuid(item_id, "item_id"), "note": note,
+                       "audit": spot_check is True}, source="mcp")
+    return {"item_id": item_id, "verdict": verdict, "spot_check": spot_check is True}
 
 
 def keep_rest(conn, item_ids: list) -> dict:
@@ -282,7 +283,10 @@ TOOLS = {
                     "they chose to judge). Never decide for them.",
                     {"item_id": {"type": "string", "description": "A capture's item_id from review_digest"},
                      "verdict": {"type": "string", "enum": ["keep", "star", "discard"]},
-                     "note": {"type": "string", "maxLength": 500, "description": "Why, if the owner said"}},
+                     "note": {"type": "string", "maxLength": 500, "description": "Why, if the owner said"},
+                     "spot_check": {"type": "boolean", "default": False,
+                                    "description": "true for an item from review_digest's spot_checks; false for one "
+                                                   "the owner chose to judge from the rest"}},
                     ["item_id", "verdict"]),
     "keep_rest": (keep_rest, False, "Keep, in one go, the non-spot-check captures from review_digest that the "
                   "owner agreed to keep without reading. Only after they say so.",
