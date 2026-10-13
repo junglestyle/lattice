@@ -78,7 +78,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   `file_idea` (Claude may suggest a reorganisation; it changes themes only once you agree), `draft_material` (a theme, digest point or set of ideas
   with notes, quotes, connections and a reading order, for Claude to draft from), `weekly_digest` / `rate_digest_point`, plus `look_again` (kept unread, now mattering; `whats_new` counts them). "Let's
   catch up on review" works by voice.
-  It takes the Lattice token as a bearer header and is tailnet-only like the rest. For claude.ai and the phone
+  It takes the Lattice token as a bearer header and is tailnet-only like the rest. `/demo/mcp` is a read-only view
+  for showing Lattice to someone, holding back what demo mode does (see docs/public-mcp.md, "The demo connector"). For claude.ai and the phone
   app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",
   "unknown", S1, S2...), as in Idea Machine's privacy policy B. From Claude Code on a tailnet machine:
 

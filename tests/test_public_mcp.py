@@ -57,7 +57,7 @@ def call(base, path, method="GET", ip=CLAUDE_IP, json_body=None, form=None, head
         return e.code, e.headers, e.read()
 
 
-def sign_in(base, writes=True, scope="lattice:read lattice:write"):
+def sign_in(base, writes=True, scope="lattice:read lattice:write", path="/mcp"):
     """Register, consent and trade the code, as claude.ai does. Returns the token response."""
     status, _, body = call(base, "/register", "POST", json_body={"redirect_uris": [CALLBACK], "client_name": "Claude",
                                                                  "token_endpoint_auth_method": "none"})
@@ -67,9 +67,10 @@ def sign_in(base, writes=True, scope="lattice:read lattice:write"):
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     q = urllib.parse.urlencode({"response_type": "code", "client_id": client_id, "redirect_uri": CALLBACK,
                                 "code_challenge": challenge, "code_challenge_method": "S256", "state": "st8",
-                                "scope": scope, "resource": BASE + "/mcp"})
+                                "scope": scope, "resource": BASE + path})
     status, headers, page = call(base, f"/authorize?{q}", ip="203.0.113.9")   # my browser, anywhere
     assert status == 200 and headers["X-Frame-Options"] == "DENY" and b"claude.ai" in page
+    assert (b"demo connector" in page) == (path == "/demo/mcp") and (b'name="writes"' in page) == (path != "/demo/mcp")
     request = re.search(rb'name="request" value="([^"]+)"', page).group(1).decode()
     form = {"request": request, "token": TOKEN, **({"writes": "on"} if writes else {})}
     status, headers, _ = call(base, "/authorize", "POST", ip="203.0.113.9", form=form)
@@ -79,14 +80,14 @@ def sign_in(base, writes=True, scope="lattice:read lattice:write"):
     assert f"{back.scheme}://{back.netloc}{back.path}" == CALLBACK and params["state"] == "st8" and params["iss"] == BASE
     status, headers, body = call(base, "/token", "POST", form={"grant_type": "authorization_code", "code": params["code"],
                                                                "redirect_uri": CALLBACK, "client_id": client_id,
-                                                               "code_verifier": verifier, "resource": BASE + "/mcp"})
+                                                               "code_verifier": verifier, "resource": BASE + path})
     assert status == 200, body
     tokens = json.loads(body) | {"client_id": client_id, "_code": params["code"], "_verifier": verifier}
     return tokens
 
 
-def mcp(base, access, message):
-    status, _, body = call(base, "/mcp", "POST", json_body=message, headers={"Authorization": f"Bearer {access}"})
+def mcp(base, access, message, path="/mcp"):
+    status, _, body = call(base, path, "POST", json_body=message, headers={"Authorization": f"Bearer {access}"})
     return status, json.loads(body) if body else None
 
 
@@ -205,3 +206,24 @@ def test_tools_work_through_it(public):
     _, body = mcp(public, t["access_token"], {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                                               "params": {"name": "list_themes", "arguments": {}}})
     assert body["result"]["structuredContent"]["themes"]
+
+
+def test_a_demo_connector_is_its_own_read_only_resource(public):
+    prm = json.loads(call(public, "/.well-known/oauth-protected-resource/demo/mcp")[2])
+    assert prm["resource"] == BASE + "/demo/mcp" and prm["scopes_supported"] == ["lattice:read"]
+    status, headers, _ = call(public, "/demo/mcp", "POST", json_body={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    assert status == 401 and "/.well-known/oauth-protected-resource/demo/mcp" in headers["WWW-Authenticate"]
+    demo = sign_in(public, writes=True, path="/demo/mcp")   # asking for writes doesn't get them
+    assert demo["scope"] == "lattice:read"
+    ping = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+    assert mcp(public, demo["access_token"], ping, "/demo/mcp")[0] == 200
+    assert mcp(public, demo["access_token"], ping)[0] == 401   # a demo token never reaches the lattice itself
+    full = sign_in(public)
+    assert mcp(public, full["access_token"], ping, "/demo/mcp")[0] == 200   # a full one may show less
+    refreshed = json.loads(call(public, "/token", "POST", form={
+        "grant_type": "refresh_token", "refresh_token": demo["refresh_token"], "client_id": demo["client_id"]})[2])
+    assert mcp(public, refreshed["access_token"], ping)[0] == 401   # still bound after a refresh
+    status, _, body = call(public, "/token", "POST", form={
+        "grant_type": "refresh_token", "refresh_token": refreshed["refresh_token"], "client_id": demo["client_id"],
+        "resource": BASE + "/mcp"})
+    assert status == 400 and json.loads(body)["error"] == "invalid_target"

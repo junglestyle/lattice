@@ -25,14 +25,14 @@
 </head>
 <body>
 <form method="post" action="/authorize">
-  <h1>Connect Lattice to /*CLIENT*/</h1>
+  <h1>Connect Lattice/*DEMO*/ to /*CLIENT*/</h1>
   <p>After you sign in, you'll go back to <b>/*HOST*/</b>, and Claude can search your ideas and read them,
      with their quotes (other people's names replaced by S1, S2…).</p>
   <p class="msg">/*MESSAGE*/</p>
   <input type="hidden" name="request" value="/*REQUEST*/">
   <input name="token" type="password" placeholder="Lattice token" autocomplete="current-password" autofocus required>
-  <label><input type="checkbox" name="writes" checked> Also let Claude record your review verdicts, star ideas, link them and set
-    notes when you ask</label>
+  <!--WRITES--><label><input type="checkbox" name="writes" checked> Also let Claude record your review verdicts, star ideas, link them and set
+    notes when you ask</label><!--/WRITES-->
   <button type="submit">Allow</button>
 </form>
 </body>

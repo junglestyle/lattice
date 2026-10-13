@@ -72,7 +72,7 @@ Claude Code doesn't use this. It connects to the tailnet endpoint with the token
    ```
    http.host eq "lattice-mcp.<your domain>"
    and not (http.request.uri.path eq "/authorize")
-   and not (ip.src in {160.79.104.0/21} and (http.request.uri.path in {"/mcp" "/token" "/register"}
+   and not (ip.src in {160.79.104.0/21} and (http.request.uri.path in {"/mcp" "/demo/mcp" "/token" "/register"}
             or starts_with(http.request.uri.path, "/.well-known/oauth-")))
    ```
 
@@ -102,6 +102,26 @@ says the connector needs to be reconnected (its refresh token lapsed after 30 da
 
 If you forget step 3, the page stays guarded by the token and the wrong-token cap, so it's not open to everyone,
 but it is exposed to the internet until you switch the rule back on.
+
+## The demo connector
+
+For showing Lattice to someone through a Claude app (an interview, a demo), add a second connector at
+`https://lattice-mcp.<your domain>/demo/mcp`, the same way as above. Name it something like "Lattice (demo)". It is
+read-only, offers no review tools, and holds back what demo mode in the app does: ideas and themes Idea Machine
+tagged sensitive (`pub.sensitivity`), digest points citing them and digest summaries; swearing is blacked out. Your
+own Hide it / Show it marks decide. Its sign-in page says "demo connector", and its tokens only work on `/demo/mcp`.
+
+Which tagged categories it hides is the server's setting, since the app's choices live on your phone. The default is
+`sex,gender_politics,political_extremism,violence,racism`; to change it, add a line to `lattice.env` and re-run
+`install/nas.sh`:
+
+```sh
+echo "LATTICE_DEMO_HIDE=sex,gender_politics,political_extremism,violence,racism,profanity" >> /mnt/storage/ideamachine/config/lattice.env
+```
+
+Before a demo: in a claude.ai chat, turn the demo connector on and the full one off (the connectors menu in the chat),
+and ask it something to check. Your existing WAF rule needs `/demo/mcp` in its list of paths (as in step 4 above),
+or Cloudflare blocks the demo connector.
 
 ## Turn it off
 

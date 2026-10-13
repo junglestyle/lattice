@@ -10,6 +10,8 @@ kept in bulk and flagged so).
 """
 
 import json
+import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -612,30 +614,113 @@ TOOLS = {
 }
 
 
-def tool_list(writes: bool = True) -> list[dict]:
+# --- The demo view (/demo/mcp) -----------------------------------------------------------------------------------
+# For showing the lattice to someone through a Claude app, as the app's demo mode does: read-only, the private
+# review queue left out, ideas and themes tagged sensitive (pub.sensitivity) in the hidden categories withheld from
+# every answer, digest summaries and points citing a withheld idea dropped, and swearing blacked out. The categories
+# are the server's (LATTICE_DEMO_HIDE, comma-separated; the app's choices live on the phone); my own mark on an idea
+# or theme always decides.
+
+DEMO_TOOLS = ("search_ideas", "get_idea", "best_ideas", "list_themes", "open_theme", "whats_new", "weekly_digest",
+              "similar_ideas", "draft_material")
+DEMO_INSTRUCTIONS = """Lattice (demo) is a read-only view of the owner's idea lattice, curated for showing it to other
+people: ideas Idea Machine captured from the owner's recorded conversations, grouped into themes and connected. Some
+ideas and themes are withheld and swearing is blacked out; don't speculate about or mention what might be missing.
+Speak to the owner as "you". In quotes, "me" is the owner; S1, S2... are other people. Search or open a theme before
+asking for ids. To draft something, call draft_material, then ask what to make before writing."""
+DEMO_DEFAULT = "sex,gender_politics,political_extremism,violence,racism"
+SWEARING = re.compile(r"\b(" + "|".join([
+    r"fuck\w*", r"motherfuck\w*", r"shit\w*", r"bullshit\w*", r"bitch\w*", r"cunts?", r"cocks?", r"cocksuck\w*",
+    r"dick(head)?s?", r"puss(y|ies)", r"ass(hole)?s?", r"arse(hole)?s?", r"bastards?", r"piss\w*", r"sluts?", r"whores?",
+    r"damn\w*", r"goddamn\w*", r"twats?", r"wank\w*", r"douche\w*", r"fag(got)?s?", r"n[i1]gg\w*", r"retards?", r"spics?",
+    r"chinks?", r"kikes?"]) + r")\b", re.IGNORECASE)   # the same list as the app's
+
+
+def demo_categories() -> set:
+    return {c.strip() for c in os.environ.get("LATTICE_DEMO_HIDE", DEMO_DEFAULT).split(",") if c.strip()}
+
+
+class _Withheld:
+    """What the demo view keeps back, worked out once per call."""
+
+    def __init__(self, conn):
+        cats, sens = demo_categories(), data.sensitivity(conn)
+        hide = lambda s: s["sensitive"] if s["by"] == "owner" else bool(set(s["categories"]) & cats)   # noqa: E731
+        self.ideas = {i for i, s in sens["ideas"].items() if hide(s)}
+        self.themes = {i for i, s in sens["themes"].items() if hide(s)}
+        self.theme_names = {n for i, n in conn.execute("SELECT theme_id::text, name FROM pub.themes") if i in self.themes}
+        self.titles = {t for i, t in conn.execute("SELECT idea_id::text, title FROM pub.ideas") if i in self.ideas}
+        self.ids = self.ideas | self.themes
+
+    def check(self, conn, name: str, args: dict) -> None:
+        """Asking for a withheld idea or theme gets the answer a missing one would."""
+        if args.get("idea_id") is not None and str(args["idea_id"]) in self.ideas:
+            raise ToolError("no such idea (it may have been forgotten)")
+        if name in ("open_theme", "draft_material") and args.get("theme") is not None:
+            if _theme(conn, args["theme"])[0] in self.themes:
+                raise ToolError(f"no theme matches {args['theme']!r}; list_themes shows them all")
+        if any(str(i) in self.ideas for i in args.get("idea_ids") or []):
+            raise ToolError("no such idea (it may have been forgotten)")
+
+    def clean(self, x, key: str = ""):
+        if isinstance(x, dict):
+            return {k: self.clean(v, k) for k, v in x.items()
+                    if k not in ("captures_waiting_for_review", "kept_unread_worth_a_look")}
+        if isinstance(x, list):
+            out = []
+            for el in x:
+                if isinstance(el, dict) and any(str(el.get(k)) in self.ids for k in ("id", "idea_id", "other_id", "a", "b")):
+                    continue
+                if isinstance(el, str) and (el in self.theme_names or el in self.titles):
+                    continue
+                out.append(self.clean(el, key))
+            return out
+        if isinstance(x, str):
+            return SWEARING.sub(lambda m: "\u2588" * len(m.group()), x)
+        return x
+
+
+def _demo_digest(result: dict, held: _Withheld) -> dict:
+    return {**result, "summary": "", "points": [p for p in result["points"]
+                                                if not any(i["id"] in held.ideas for i in p["ideas"])]}
+
+
+def tool_list(writes: bool = True, demo: bool = False) -> list[dict]:
     return [{"name": name, "description": desc,
              "inputSchema": {"type": "object", "properties": props, "required": req, "additionalProperties": False},
              "annotations": {"readOnlyHint": ro, "destructiveHint": False, "openWorldHint": False}}
-            for name, (_, ro, desc, props, req) in TOOLS.items() if ro or writes]
+            for name, (_, ro, desc, props, req) in TOOLS.items()
+            if (name in DEMO_TOOLS if demo else ro or writes)]
 
 
-def call(conn, name: str, args: dict, writes: bool = True) -> dict:
-    if name not in TOOLS or not (TOOLS[name][1] or writes):   # a write tool on a read-only grant doesn't exist
-        raise UnknownTool(name)
+def call(conn, name: str, args: dict, writes: bool = True, demo: bool = False) -> dict:
+    if name not in TOOLS or (demo and name not in DEMO_TOOLS) or not (TOOLS[name][1] or (writes and not demo)):
+        raise UnknownTool(name)   # a write tool on a read-only grant, or anything outside the demo view, doesn't exist
     fn, _, _, props, req = TOOLS[name]
     try:
         missing = [k for k in req if k not in args]
         if missing:
             raise ToolError(f"missing {', '.join(missing)}")
+        held = _Withheld(conn) if demo else None
+        if held:
+            held.check(conn, name, args)
+            if name == "draft_material" and args.get("point") is not None:   # a withheld point isn't there
+                d = _demo_digest(weekly_digest(conn, args.get("digest_week")), held)
+                if not any(p["point"] == args["point"] for p in d["points"]):
+                    raise ToolError("that digest has no such point")
         result = fn(conn, **{k: v for k, v in args.items() if k in props})
+        if held:
+            if name == "weekly_digest":
+                result = _demo_digest(result, held)
+            result = held.clean(result)
     except (ToolError, data.NotYet, ValueError, TypeError) as e:
         return {"content": [{"type": "text", "text": str(e)}], "isError": True}
     return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}], "structuredContent": result}
 
 
-def handle(message, connect=data.connect, writes: bool = True):
+def handle(message, connect=data.connect, writes: bool = True, demo: bool = False):
     """One JSON-RPC message in, its response out (None for a notification). `writes`: whether the caller may star,
-    link and note (a read-only OAuth grant may not)."""
+    link and note (a read-only OAuth grant may not). `demo`: the read-only view with sensitive content held back."""
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
         return _error(message.get("id") if isinstance(message, dict) else None, -32600, "invalid request")
     mid, method, params = message.get("id"), message["method"], message.get("params") or {}
@@ -644,16 +729,17 @@ def handle(message, connect=data.connect, writes: bool = True):
     if method == "initialize":
         asked = params.get("protocolVersion")
         return _result(mid, {"protocolVersion": asked if asked in PROTOCOLS else PROTOCOLS[0],
-                             "capabilities": {"tools": {"listChanged": False}}, "serverInfo": SERVER,
-                             "instructions": INSTRUCTIONS})
+                             "capabilities": {"tools": {"listChanged": False}},
+                             "serverInfo": {**SERVER, "title": "Lattice (demo)"} if demo else SERVER,
+                             "instructions": DEMO_INSTRUCTIONS if demo else INSTRUCTIONS})
     if method == "ping":
         return _result(mid, {})
     if method == "tools/list":
-        return _result(mid, {"tools": tool_list(writes)})
+        return _result(mid, {"tools": tool_list(writes, demo)})
     if method == "tools/call":
         try:
             with connect() as conn:
-                return _result(mid, call(conn, params.get("name"), params.get("arguments") or {}, writes))
+                return _result(mid, call(conn, params.get("name"), params.get("arguments") or {}, writes, demo))
         except UnknownTool:
             return _error(mid, -32602, f"unknown tool {params.get('name')!r}")
     return _error(mid, -32601, f"method not found: {method}")

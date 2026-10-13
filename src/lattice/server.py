@@ -7,6 +7,7 @@ over HTTPS. Never bind it to the LAN or the internet, since evidence quotes incl
 import argparse
 import datetime
 import html
+import re
 import json
 import threading
 import urllib.parse
@@ -23,7 +24,7 @@ STATIC = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifes
           "/sw.js": ("sw.js", "text/javascript")}
 
 
-def answer_mcp(h: BaseHTTPRequestHandler, writes: bool = True) -> None:
+def answer_mcp(h: BaseHTTPRequestHandler, writes: bool = True, demo: bool = False) -> None:
     """One MCP exchange, JSON responses only, once the caller is authenticated. A browser page can't use it: a
     request with a foreign Origin is refused outright."""
     origin = h.headers.get("Origin")
@@ -37,10 +38,10 @@ def answer_mcp(h: BaseHTTPRequestHandler, writes: bool = True) -> None:
         h._json(mcp._error(None, -32700, "parse error"), 400)
         return
     if isinstance(message, list):   # a batch (older protocol versions)
-        answers = [a for a in (mcp.handle(m, writes=writes) for m in message) if a is not None]
+        answers = [a for a in (mcp.handle(m, writes=writes, demo=demo) for m in message) if a is not None]
         h._json(answers) if answers else h._send(202, b"", "application/json")
         return
-    answer = mcp.handle(message, writes=writes)
+    answer = mcp.handle(message, writes=writes, demo=demo)
     h._json(answer) if answer is not None else h._send(202, b"", "application/json")
 
 
@@ -75,8 +76,8 @@ class Handler(BaseHTTPRequestHandler):
         return urllib.parse.urlsplit(self.path).path
 
     def do_POST(self) -> None:  # noqa: N802 (http.server's naming)
-        if self._path() == "/mcp":
-            self._mcp()
+        if self._path() in ("/mcp", "/demo/mcp"):
+            self._mcp(demo=self._path() == "/demo/mcp")
             return
         if self._path() == "/api/feedback":
             self._feedback()
@@ -110,19 +111,20 @@ class Handler(BaseHTTPRequestHandler):
             # A kind Idea Machine's database doesn't take yet: 503, so the app keeps it queued and tries later.
             self._json({"error": "Idea Machine doesn't accept this yet"}, 503)
 
-    def _mcp(self) -> None:
-        """MCP over Streamable HTTP (lattice.mcp) for tailnet clients. The bearer token is LATTICE_TOKEN."""
+    def _mcp(self, demo: bool = False) -> None:
+        """MCP over Streamable HTTP (lattice.mcp) for tailnet clients. The bearer token is LATTICE_TOKEN. /demo/mcp is
+        the read-only view with sensitive content held back."""
         if not auth.bearer_ok(self.headers.get("Authorization")):
             self._send(401, b'{"error": "bearer token required"}', "application/json", {"WWW-Authenticate": "Bearer"})
             return
-        answer_mcp(self)
+        answer_mcp(self, writes=not demo, demo=demo)
 
     def do_DELETE(self) -> None:  # noqa: N802  (MCP session teardown: there are no sessions)
         self._json({"error": "no sessions"}, 405)
 
     def do_GET(self) -> None:  # noqa: N802
         path = self._path()
-        if path == "/mcp":   # no server-initiated stream
+        if path in ("/mcp", "/demo/mcp"):   # no server-initiated stream
             self._send(405, b'{"error": "POST only"}', "application/json", {"Allow": "POST"})
             return
         if path in STATIC:
@@ -218,7 +220,11 @@ class PublicMcpHandler(Handler):
         esc = html.escape
         page = (HERE.joinpath("authorize.html").read_text().replace("/*MESSAGE*/", esc(message))
                 .replace("/*REQUEST*/", esc(request)).replace("/*CLIENT*/", esc(client)).replace("/*HOST*/", esc(host)))
-        self._page(status, page)
+        if (oauth.verify("request", request) or {}).get("res") == oauth.DEMO:   # the demo view: read-only, curated
+            page = re.sub(r"<!--WRITES-->.*?<!--/WRITES-->", "<p><b>The demo connector:</b> read-only, with ideas tagged "
+                          "sensitive held back and swearing blacked out, for showing Lattice to someone.</p>",
+                          page, flags=re.S).replace("/*DEMO*/", " (demo)")
+        self._page(status, page.replace("/*DEMO*/", ""))
 
     def _back_to(self, uri: str, **params) -> None:
         params = {k: v for k, v in params.items() if v is not None}
@@ -233,9 +239,11 @@ class PublicMcpHandler(Handler):
             self._nothing()
         elif path in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"):
             self._json(oauth.protected_resource(base))
+        elif path == "/.well-known/oauth-protected-resource/demo/mcp":
+            self._json(oauth.protected_resource(base, oauth.DEMO))
         elif path == "/.well-known/oauth-authorization-server":
             self._json(oauth.authorization_server(base))
-        elif path == "/mcp":   # no server-initiated stream
+        elif path in ("/mcp", "/demo/mcp"):   # no server-initiated stream
             self._send(405, b'{"error": "POST only"}', "application/json", {"Allow": "POST"})
         else:
             self._nothing()
@@ -247,14 +255,18 @@ class PublicMcpHandler(Handler):
             return
         if not self._from_claude():
             self._nothing()
-        elif path == "/mcp":
-            grant = oauth.access(self.headers.get("Authorization"))
+        elif path in ("/mcp", "/demo/mcp"):
+            header = self.headers.get("Authorization")
+            # The demo view takes its own tokens, or a full one (it shows less, and never writes); /mcp only its own.
+            grant = oauth.access(header, path) or (oauth.access(header) if path == "/demo/mcp" else None)
             if grant is None:
-                bad = "invalid_token" if self.headers.get("Authorization") else None
                 self._send(401, b'{"error": "sign in first"}', "application/json",
-                           {"WWW-Authenticate": oauth.challenge_header(base, bad)})
+                           {"WWW-Authenticate": oauth.challenge_header(base, "invalid_token" if header else None, path)})
                 return
-            answer_mcp(self, writes=oauth.WRITE in grant["scopes"])
+            if path == "/demo/mcp":
+                answer_mcp(self, writes=False, demo=True)
+            else:
+                answer_mcp(self, writes=oauth.WRITE in grant["scopes"])
         elif path == "/register":
             try:
                 length = min(int(self.headers.get("Content-Length") or 0), 8192)

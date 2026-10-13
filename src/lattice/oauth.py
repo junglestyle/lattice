@@ -15,6 +15,10 @@ what must happen once: codes already used, and each refresh token family's lates
 used twice revokes its family. After a restart that memory is empty and the next refresh is trusted.
 
 Redirects go only to Claude's hosted callback; Claude Code uses the tailnet endpoint with the token instead.
+
+Two resources: /mcp, the lattice, and /demo/mcp, a read-only view with sensitive content held back, for showing it
+to someone. A grant is for one of them (the client says which, RFC 8707 `resource`) and its tokens carry it, so a
+demo connector's tokens never reach /mcp and never write.
 """
 
 import base64
@@ -29,6 +33,7 @@ from lattice import auth
 
 REDIRECTS = {"https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"}
 READ, WRITE = "lattice:read", "lattice:write"
+MCP, DEMO = "/mcp", "/demo/mcp"
 ACCESS_TTL, REFRESH_TTL, CODE_TTL, REQUEST_TTL = 3600, 30 * 24 * 3600, 300, 900
 LOGIN_FAILURES_PER_HOUR = 10
 
@@ -107,13 +112,21 @@ def login_failed() -> None:
 
 # --- Metadata ---------------------------------------------------------------------------------------------------
 
-def resource(base: str) -> str:
-    return base + "/mcp"
+def resource(base: str, path: str = MCP) -> str:
+    return base + path
 
 
-def protected_resource(base: str) -> dict:
-    return {"resource": resource(base), "authorization_servers": [base], "scopes_supported": [READ, WRITE],
-            "bearer_methods_supported": ["header"], "resource_name": "Lattice"}
+def _resource_path(base: str, value) -> str | None:
+    """Which of my resources a `resource` parameter names (none named: /mcp), or None if it's not one of mine."""
+    if value in (None, ""):
+        return MCP
+    return next((p for p in (MCP, DEMO) if value == resource(base, p)), None)
+
+
+def protected_resource(base: str, path: str = MCP) -> dict:
+    return {"resource": resource(base, path), "authorization_servers": [base],
+            "scopes_supported": [READ] if path == DEMO else [READ, WRITE], "bearer_methods_supported": ["header"],
+            "resource_name": "Lattice (demo)" if path == DEMO else "Lattice"}
 
 
 def authorization_server(base: str) -> dict:
@@ -124,9 +137,10 @@ def authorization_server(base: str) -> dict:
             "authorization_response_iss_parameter_supported": True}
 
 
-def challenge_header(base: str, error: str | None = None) -> str:
-    return (f'Bearer resource_metadata="{base}/.well-known/oauth-protected-resource", scope="{READ} {WRITE}"'
-            + (f', error="{error}"' if error else ""))
+def challenge_header(base: str, error: str | None = None, path: str = MCP) -> str:
+    meta = f"{base}/.well-known/oauth-protected-resource" + (DEMO if path == DEMO else "")
+    scope = READ if path == DEMO else f"{READ} {WRITE}"
+    return f'Bearer resource_metadata="{meta}", scope="{scope}"' + (f', error="{error}"' if error else "")
 
 
 # --- Registration (RFC 7591) ------------------------------------------------------------------------------------
@@ -166,11 +180,14 @@ def check_request(base: str, q: dict) -> tuple[dict, str]:
         raise Redirect(redirect, q.get("state"), "unsupported_response_type", "only response_type=code")
     if q.get("code_challenge_method") != "S256" or not 43 <= len(q.get("code_challenge", "")) <= 128:
         raise Redirect(redirect, q.get("state"), "invalid_request", "PKCE with S256 is required")
-    if q.get("resource") not in (None, "", resource(base)):
+    res = _resource_path(base, q.get("resource"))
+    if res is None:
         raise Redirect(redirect, q.get("state"), "invalid_target", "unknown resource")
     scopes = set((q.get("scope") or f"{READ} {WRITE}").split()) & {READ, WRITE} or {READ}
+    if res == DEMO:   # the demo view only reads
+        scopes = {READ}
     req = sign("request", REQUEST_TTL, cid=_cid(q["client_id"]), redirect=redirect, challenge=q["code_challenge"],
-               state=q.get("state"), scopes=sorted(scopes | {READ}))
+               state=q.get("state"), scopes=sorted(scopes | {READ}), res=res)
     return c, req
 
 
@@ -187,20 +204,21 @@ def grant(request: str, allow_writes: bool) -> dict:
     r = verify("request", request)
     if r is None:
         raise OAuthError("invalid_request", "this sign-in page expired; start again from Claude")
-    scopes = [s for s in r["scopes"] if s == READ or (s == WRITE and allow_writes)]
+    res = r.get("res", MCP)
+    scopes = [s for s in r["scopes"] if s == READ or (s == WRITE and allow_writes and res == MCP)]
     code = sign("code", CODE_TTL, cid=r["cid"], redirect=r["redirect"], challenge=r["challenge"], scopes=scopes,
-                n=secrets.token_hex(8))
+                n=secrets.token_hex(8), res=res)
     return {"redirect": r["redirect"], "state": r["state"], "code": code}
 
 
 # --- Tokens -----------------------------------------------------------------------------------------------------
 
-def _tokens(cid: str, scopes: list, family: str, gen: int) -> dict:
+def _tokens(cid: str, scopes: list, family: str, gen: int, res: str = MCP) -> dict:
     with _lock:
         _families[family] = gen
-    return {"access_token": sign("access", ACCESS_TTL, cid=cid, scopes=scopes),
+    return {"access_token": sign("access", ACCESS_TTL, cid=cid, scopes=scopes, res=res),
             "token_type": "Bearer", "expires_in": ACCESS_TTL, "scope": " ".join(scopes),
-            "refresh_token": sign("refresh", REFRESH_TTL, cid=cid, scopes=scopes, fam=family, gen=gen)}
+            "refresh_token": sign("refresh", REFRESH_TTL, cid=cid, scopes=scopes, fam=family, gen=gen, res=res)}
 
 
 def token(base: str, form: dict) -> dict:
@@ -208,8 +226,10 @@ def token(base: str, form: dict) -> dict:
     client_id = form.get("client_id", "")
     client(client_id)
     cid = _cid(client_id)
-    if form.get("resource") not in (None, "", resource(base)):
+    asked = _resource_path(base, form.get("resource"))
+    if asked is None:
         raise OAuthError("invalid_target", "unknown resource")
+    named = form.get("resource") not in (None, "")
     if grant_type == "authorization_code":
         code = verify("code", form.get("code", ""))
         if code is None or code["cid"] != cid or code["redirect"] != form.get("redirect_uri"):
@@ -217,9 +237,12 @@ def token(base: str, form: dict) -> dict:
         verifier = form.get("code_verifier", "")
         if not hmac.compare_digest(_b64(hashlib.sha256(verifier.encode()).digest()), code["challenge"]):
             raise OAuthError("invalid_grant", "code_verifier doesn't match the code_challenge")
+        res = code.get("res", MCP)
+        if named and asked != res:
+            raise OAuthError("invalid_target", "the code was granted for another resource")
         if not _spend_code(code["n"], code["exp"]):
             raise OAuthError("invalid_grant", "the code was already used")
-        return _tokens(cid, code["scopes"], secrets.token_hex(8), 1)
+        return _tokens(cid, code["scopes"], secrets.token_hex(8), 1, res)
     if grant_type == "refresh_token":
         r = verify("refresh", form.get("refresh_token", ""))
         if r is None or r["cid"] != cid:
@@ -229,11 +252,16 @@ def token(base: str, form: dict) -> dict:
             if latest is None or latest > r["gen"]:   # revoked, or an old token used again: revoke the family
                 _families[r["fam"]] = None
                 raise OAuthError("invalid_grant", "the refresh token was already used")
-        return _tokens(cid, r["scopes"], r["fam"], r["gen"] + 1)
+        res = r.get("res", MCP)
+        if named and asked != res:
+            raise OAuthError("invalid_target", "the refresh token was granted for another resource")
+        return _tokens(cid, r["scopes"], r["fam"], r["gen"] + 1, res)
     raise OAuthError("unsupported_grant_type", "authorization_code or refresh_token")
 
 
-def access(header: str | None) -> dict | None:
-    """The claims of a valid access token in an Authorization header, else None."""
+def access(header: str | None, path: str = MCP) -> dict | None:
+    """The claims of a valid access token in an Authorization header for the resource at `path`, else None. Tokens
+    from before resources were bound carry none, and count as /mcp's."""
     scheme, _, value = (header or "").partition(" ")
-    return verify("access", value.strip()) if scheme.lower() == "bearer" else None
+    claims = verify("access", value.strip()) if scheme.lower() == "bearer" else None
+    return claims if claims and claims.get("res", MCP) == path else None

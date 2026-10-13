@@ -331,3 +331,40 @@ def test_demo_mode_marks_are_checked(url):
         assert post(url + "/api/feedback", login(url), bad)[0] == 400, bad
     snap = json.loads(request(url + "/api/snapshot", login(url))[2])
     assert set(snap["sensitivity"]) == {"ideas", "themes"}
+
+
+@needs_db
+def test_the_demo_view_holds_back_and_blacks_out(monkeypatch, admin):
+    from lattice import mcp
+
+    conn = data.connect()
+    themes = {n: str(i) for i, n in conn.execute("SELECT theme_id, name FROM pub.themes")}
+    gender = next(n for n in themes if n.startswith("Gender")) if any(n.startswith("Gender") for n in themes) else max(themes)
+    hidden = [str(i) for (i,) in conn.execute("SELECT idea_id FROM pub.ideas WHERE %s = ANY(themes)", (gender,))]
+    fake = {"themes": {themes[gender]: {"sensitive": True, "categories": ["gender_politics"], "by": "claude"}},
+            "ideas": {i: {"sensitive": True, "categories": ["gender_politics"], "by": "claude"} for i in hidden}}
+    monkeypatch.setattr(data, "sensitivity", lambda c: fake)
+    rpc = lambda m, **p: mcp.handle({"jsonrpc": "2.0", "id": 1, "method": m, "params": p}, connect=data.connect, demo=True)
+    names = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
+    assert names == set(mcp.DEMO_TOOLS)
+    assert "Lattice (demo)" in rpc("initialize", protocolVersion="2025-06-18")["result"]["serverInfo"]["title"]
+    use = lambda name, **a: rpc("tools/call", name=name, arguments=a)
+    assert "error" in use("review_digest") and "error" in use("star_idea", idea_id=hidden[0])
+    listed = use("list_themes")["result"]["structuredContent"]["themes"]
+    assert gender not in {t["name"] for t in listed} and listed
+    assert use("get_idea", idea_id=hidden[0])["result"]["isError"]
+    assert use("open_theme", theme=gender)["result"]["isError"]
+    text = json.dumps([use("search_ideas", query=w)["result"] for w in ("the", "a", "is")])
+    assert not any(i in text for i in hidden)
+    other = next(t for t in listed if t["ideas"] > 1)["name"]
+    drafted = use("draft_material", theme=other)["result"]["structuredContent"]
+    assert not any(i["id"] in hidden for i in drafted["ideas"])
+    digest = use("weekly_digest")["result"]
+    if not digest.get("isError"):
+        d = digest["structuredContent"]
+        assert d["summary"] == "" and not any(i["id"] in hidden for p in d["points"] for i in p["ideas"])
+    held = mcp._Withheld(conn)
+    assert held.clean({"quote": "What the fuck, this is bullshit, class"})["quote"] == "What the ████, this is ████████, class"
+    monkeypatch.setenv("LATTICE_DEMO_HIDE", "violence")   # the server's choice of categories
+    assert gender in {t["name"] for t in use("list_themes")["result"]["structuredContent"]["themes"]}
+    conn.close()
