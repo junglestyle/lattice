@@ -47,6 +47,10 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   sex, gender and sexual politics, political extremism, violence, racism, and swearing) are taken out of every view,
   by the categories you tick; digest points citing them and digest summaries go too. "Black out swearing" redacts
   swear words wherever text is shown. In an idea's or theme's panel, Hide it / Show it overrides the tag.
+- **Words for transcription** (in the run-status panel): the vocabulary Hearsay boosts. Idea Machine suggests words it
+  saw misheard (with how they were heard) or typed in your archive; your corrections and words you add go straight in
+  (`vocab_add` / `vocab_remove`; `pub.vocab`). Idea Machine writes the approved list to the `vocab.json` Hearsay reads,
+  and you commit it on Hearsay's Words page.
 - **View**: a time range (all, 90, 30 or 7 days: by when an idea was said, or made if you added it) and starred only,
   for the map, Time and List; and idea titles on or off on the map. A strip over the map steps through the themes
   (on a phone, ‹ › in the sheet's title bar).

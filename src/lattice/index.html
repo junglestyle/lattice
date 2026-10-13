@@ -234,6 +234,17 @@
   #adddlg::backdrop { background: #0006; }
   #adddlg .editor { margin: 0; border: 0; }
   #adddlg h2 { font-size: 16px; margin: 0 0 4px; }
+  #vocabdlg { border: 1px solid var(--border); border-radius: 10px; padding: 0; width: min(560px, calc(100vw - 32px));
+              max-height: 85dvh; background: var(--surface-1); color: var(--text-primary); }
+  #vocabdlg::backdrop { background: #0006; }
+  #vocabdlg .editor { margin: 0; border: 0; }
+  #vocabdlg h2 { font-size: 16px; margin: 0; }
+  #vocabdlg h3 { font-size: 13px; margin: 8px 0 2px; color: var(--text-secondary); }
+  #vocabdlg #vocabterm { flex: 1; }
+  .vterm { display: flex; gap: 8px; align-items: baseline; border-top: 1px solid var(--border); padding: 6px 0; }
+  .vterm b { font-weight: 600; }
+  .vterm .why { flex: 1; color: var(--text-muted); font-size: 12px; }
+  .vterm button { flex: none; }
   .themetools { display: flex; gap: 14px; margin: -4px 0 8px; }
   .ideathemes { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; margin: 0 0 10px; }
   .tchip { display: inline-flex; gap: 4px; border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
@@ -333,6 +344,16 @@
 </main>
 <div class="tip" id="tip"></div>
 <div id="runs" role="dialog" aria-label="Recent runs"></div>
+<dialog id="vocabdlg" aria-labelledby="vocabh"><div class="editor">
+  <h2 id="vocabh">Words for transcription</h2>
+  <p class="muted">Hearsay boosts these when it transcribes, so they stop being misheard. Idea Machine suggests words
+    it saw misheard or typed in your archive; your corrections and words you add here go straight in. Commit the list on
+    Hearsay's Words page: that re-transcribes your conversations.</p>
+  <form id="vocabadd" class="edrow"><input id="vocabterm" maxlength="60" placeholder="A word or name" aria-label="Add a word">
+    <button>Add</button></form>
+  <div id="vocabbody"></div>
+  <div class="edrow"><button id="vocabclose">Done</button></div>
+</div></dialog>
 <div id="viewpop" role="dialog" aria-label="What to show">
   <p class="vh">Time</p>
   <div class="seg" id="rangeseg" role="group" aria-label="Time"><button data-range="all">All</button><button
@@ -437,6 +458,12 @@ function applyEvent(st, e) {
   } else if (e.kind.endsWith("_theme")) {
     const t = st.graph.themes.find(t => t.id === e.theme_id);
     if (t) e.kind === "reject_theme" ? t.rejected = true : t.pinned = e.kind === "pin_theme";
+  } else if (e.kind === "vocab_add" || e.kind === "vocab_remove") {   // the latest call per word wins
+    st.vocab ||= [];
+    const w = st.vocab.find(v => v.term.toLowerCase() === e.term.toLowerCase());
+    const status = e.kind === "vocab_add" ? "in" : "removed";
+    if (w) Object.assign(w, {status}, e.source ? {source: e.source} : {});
+    else st.vocab.push({term: e.term, source: e.source || "added", status, heard_as: null, idea_id: null, example: null});
   } else if (e.kind === "idea_sensitive" || e.kind === "theme_sensitive") {
     const kind = e.kind === "idea_sensitive" ? "ideas" : "themes", key = e.idea_id || e.theme_id;
     st.sensitivity ||= {ideas: {}, themes: {}};
@@ -671,6 +698,8 @@ function renderStatus() {
         ${when(r.started_at)} · ${r.captured} captured · ${r.read} read · ${money(r.cost)}</div>
         ${r.error ? `<div class="msg">${esc(r.error)}</div>` : ""}
         ${r.warnings.map(w => `<div class="msg">${esc(w)}</div>`).join("")}</div>`).join("") +
+    `<p class="muted"><button class="linkbtn" id="vocabopen">Words for transcription</button> (what Hearsay should
+       stop mishearing)</p>` +
     `<p class="muted"><a href="/api/export" download>Export as Markdown</a> (every idea, theme and digest; opens as
        an Obsidian vault)</p>` +
     `<p class="muted"><a href="/logout">Log out</a> (also clears the copy on this device)</p>`;
@@ -2038,6 +2067,48 @@ function linker(ideaId) {
   };
   q.addEventListener("input", list);
   q.focus();
+}
+
+// --- Words for transcription ---------------------------------------------------------------------------------
+// The vocabulary Hearsay boosts (pub.vocab → Idea Machine's vocab.json → Hearsay's Words page). Suggestions need my
+// yes, since boosting junk makes recognition worse; what I add, or correct in an idea, goes straight in.
+const VOCAB_WHY = {correction: "from your correction", repair: "seen misheard", archive: "from your archive",
+                   added: "added by you"};
+const vocabDlg = document.getElementById("vocabdlg");
+document.addEventListener("click", e => {
+  if (e.target.id !== "vocabopen") return;
+  document.getElementById("runs").classList.remove("open");
+  document.getElementById("status").setAttribute("aria-expanded", false);
+  renderVocab(); vocabDlg.showModal();
+});
+document.getElementById("vocabclose").addEventListener("click", () => vocabDlg.close());
+document.getElementById("vocabadd").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = document.getElementById("vocabterm"), term = input.value.trim();
+  if (!term) return;
+  await act({kind: "vocab_add", term});
+  input.value = ""; renderVocab();
+});
+
+function renderVocab() {
+  const all = state?.vocab || [];
+  const row = (v, buttons) => `<div class="vterm"><b>${esc(v.term)}</b><span class="why">${esc(VOCAB_WHY[v.source] || v.source)}` +
+    `${v.heard_as ? `: heard as \u201c${esc(v.heard_as)}\u201d` : ""}` +
+    `${v.example ? `<br>${esc(v.example)}` : ""}</span>${buttons}</div>`;
+  const suggested = all.filter(v => v.status === "suggested"), listed = all.filter(v => v.status === "in");
+  document.getElementById("vocabbody").innerHTML =
+    (suggested.length ? `<h3>Suggested (${suggested.length})</h3>` + suggested.map(v => row(v,
+      `<button data-vadd="${escAttr(v.term)}" data-vsrc="${escAttr(v.source)}">Add</button>` +
+      `<button data-vdrop="${escAttr(v.term)}" aria-label="Not this one">No</button>`)).join("") : "") +
+    `<h3>In the list (${listed.length})</h3>` + (listed.map(v => row(v,
+      `<button class="linkbtn" data-vdrop="${escAttr(v.term)}" aria-label="Remove ${escAttr(v.term)}">Remove</button>`)).join("")
+      || `<p class="muted">Nothing yet${state?.vocab ? "" : ": Idea Machine doesn't publish the list yet"}.</p>`);
+  vocabDlg.querySelectorAll("[data-vadd]").forEach(b => b.addEventListener("click", async () => {
+    await act({kind: "vocab_add", term: b.dataset.vadd, source: b.dataset.vsrc}); renderVocab();
+  }));
+  vocabDlg.querySelectorAll("[data-vdrop]").forEach(b => b.addEventListener("click", async () => {
+    await act({kind: "vocab_remove", term: b.dataset.vdrop}); renderVocab();
+  }));
 }
 
 // --- Add an idea ----------------------------------------------------------------------------------------------

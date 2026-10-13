@@ -368,3 +368,11 @@ def test_the_demo_view_holds_back_and_blacks_out(monkeypatch, admin):
     monkeypatch.setenv("LATTICE_DEMO_HIDE", "violence")   # the server's choice of categories
     assert gender in {t["name"] for t in use("list_themes")["result"]["structuredContent"]["themes"]}
     conn.close()
+
+
+@needs_db
+def test_words_for_transcription_are_checked(url):
+    for bad in [{"kind": "vocab_add"}, {"kind": "vocab_add", "term": "  "}, {"kind": "vocab_add", "term": "x" * 61},
+                {"kind": "vocab_add", "term": "goetia", "source": "guess"}, {"kind": "vocab_remove", "term": ""}]:
+        assert post(url + "/api/feedback", login(url), bad)[0] == 400, bad
+    assert isinstance(json.loads(request(url + "/api/snapshot", login(url))[2])["vocab"], list)

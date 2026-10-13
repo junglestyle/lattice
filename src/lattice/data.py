@@ -207,7 +207,22 @@ def snapshot(conn) -> dict:
     Machine forgets is gone from the phone too."""
     return {"graph": graph(conn), "ideas": details(conn), "review": review(conn, limit=500), "status": status(conn),
             "pairs": compare_pairs(conn), "compared": compared(conn), "digests": digests(conn),
-            "neighbours": meaning.neighbours(conn), "sensitivity": sensitivity(conn)}
+            "neighbours": meaning.neighbours(conn), "sensitivity": sensitivity(conn), "vocab": vocab(conn)}
+
+
+VOCAB_SOURCES = ("correction", "repair", "archive", "added")
+
+
+def vocab(conn) -> list[dict]:
+    """The words Hearsay boosts when it transcribes (pub.vocab): in the list, suggested, or removed, each with where
+    it came from and, for a suggestion, why. Idea Machine writes the approved ones to the vocab.json Hearsay reads."""
+    try:
+        rows = conn.execute("""SELECT term, source, heard_as, status, idea_id, example FROM pub.vocab
+                               ORDER BY status, lower(term)""").fetchall()
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        return []
+    return [{"term": t, "source": s, "heard_as": h, "status": st, "idea_id": str(i) if i else None, "example": ex}
+            for t, s, h, st, i, ex in rows]
 
 
 def sensitivity(conn) -> dict:
@@ -283,7 +298,8 @@ EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_
           "file_idea": "idea_id", "unfile_idea": "idea_id",
           "idea_sensitive": "idea_id", "theme_sensitive": "theme_id",   # my call for demo mode
           "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id", "idea_add": "idea_id",
-          "digest_star": None, "digest_dismiss": None}   # a digest point: payload digest_id and point
+          "digest_star": None, "digest_dismiss": None,   # a digest point: payload digest_id and point
+          "vocab_add": None, "vocab_remove": None}       # a word for transcription: payload term
 WINNERS = ("first", "second", "tie")
 
 
@@ -297,6 +313,8 @@ def record(conn, event: dict, source: str = "lattice") -> int:
     if kind not in EVENTS:
         raise ValueError(f"unknown kind {kind!r}")
     target = EVENTS[kind]
+    if kind.startswith("vocab_"):   # a word, named by itself rather than an id column
+        return _record_term(conn, kind, event, source)
     if target is None:   # a digest point, named by numbers rather than an id column
         return _record_digest(conn, kind, event, source)
     ref = str(UUID(str(event.get(target, ""))))   # ValueError unless it's a UUID
@@ -376,6 +394,28 @@ def record(conn, event: dict, source: str = "lattice") -> int:
         raise ValueError(f"Idea Machine refused the event ({e.diag.constraint_name})") from None
 
 
+def _record_term(conn, kind: str, event: dict, source: str) -> int:
+    term = " ".join(str(event.get("term") or "").split())
+    if not term or len(term) > 60:
+        raise ValueError("a word or short phrase, up to 60 characters")
+    payload = {"term": term}
+    if kind == "vocab_add" and event.get("source") is not None:   # approving a suggestion keeps where it came from
+        if event["source"] not in VOCAB_SOURCES:
+            raise ValueError(f"source must be one of {', '.join(VOCAB_SOURCES)}")
+        payload["source"] = event["source"]
+    return _insert_unnamed(conn, kind, payload, source)
+
+
+def _insert_unnamed(conn, kind: str, payload: dict, source: str) -> int:
+    try:
+        return conn.execute("INSERT INTO pub.feedback_events (kind, payload, source) VALUES (%s, %s, %s) RETURNING event_id",
+                            (kind, json.dumps(payload), source)).fetchone()[0]
+    except psycopg.errors.CheckViolation as e:
+        if e.diag.constraint_name == "feedback_events_kind_check":
+            raise NotYet(f"Idea Machine doesn't accept {kind} events yet") from None
+        raise ValueError(f"Idea Machine refused the event ({e.diag.constraint_name})") from None
+
+
 def _record_digest(conn, kind: str, event: dict, source: str) -> int:
     payload = {}
     for k in ("digest_id", "point"):
@@ -385,13 +425,7 @@ def _record_digest(conn, kind: str, event: dict, source: str) -> int:
         payload[k] = v
     if str(event.get("note") or "").strip():
         payload["note"] = str(event["note"]).strip()[:500]
-    try:
-        return conn.execute("INSERT INTO pub.feedback_events (kind, payload, source) VALUES (%s, %s, %s) RETURNING event_id",
-                            (kind, json.dumps(payload), source)).fetchone()[0]
-    except psycopg.errors.CheckViolation as e:
-        if e.diag.constraint_name == "feedback_events_kind_check":
-            raise NotYet(f"Idea Machine doesn't accept {kind} events yet") from None
-        raise ValueError(f"Idea Machine refused the event ({e.diag.constraint_name})") from None
+    return _insert_unnamed(conn, kind, payload, source)
 
 
 def status(conn) -> dict:
