@@ -210,3 +210,26 @@ def test_draft_material(url, admin):
         point = tool(url, "draft_material", point=1)["structuredContent"]
         assert point["source"]["kind"] == "digest point" and point["ideas"]
         assert tool(url, "draft_material", point=99)["isError"]
+
+
+@needs_db
+def test_shaping_themes_is_checked(url, admin):
+    t1, t2 = [str(i) for (i,) in admin.execute("SELECT theme_id FROM pub.themes ORDER BY theme_id LIMIT 2")]
+    (idea,) = admin.execute("SELECT idea_id::text FROM pub.ideas LIMIT 1").fetchone()
+    for bad in [{"kind": "rename_theme", "theme_id": t1, "name": "  "},
+                {"kind": "merge_theme", "theme_id": t1, "into": t1},
+                {"kind": "merge_theme", "theme_id": t1, "into": "nope"},
+                {"kind": "split_theme", "theme_id": t1, "name": "New", "idea_ids": []},
+                {"kind": "split_theme", "theme_id": t1, "name": "", "idea_ids": [idea]},
+                {"kind": "split_theme", "theme_id": t1, "name": "New", "idea_ids": [idea], "new_theme_id": "x"},
+                {"kind": "file_idea", "idea_id": idea, "theme_id": "nope"}]:
+        assert post(url + "/api/feedback", login(url), bad)[0] == 400, bad
+    (name,) = admin.execute("SELECT name FROM pub.themes WHERE theme_id = %s", (t1,)).fetchone()
+    before = admin.execute("SELECT coalesce(max(event_id), 0) FROM pub.feedback_events").fetchone()[0]
+    # Only a rename to its own name goes through: Idea Machine may apply theme events as they arrive, and a real
+    # merge or split would reshape dev's themes.
+    try:
+        assert post(url + "/api/feedback", login(url), {"kind": "rename_theme", "theme_id": t1, "name": name})[0] == 201
+    finally:
+        admin.execute("DELETE FROM pub.feedback_events WHERE event_id > %s AND source = 'lattice' AND kind IN "
+                      "('rename_theme', 'merge_theme', 'split_theme', 'file_idea')", (before,))

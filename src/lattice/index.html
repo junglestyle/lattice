@@ -171,6 +171,29 @@
           width: min(420px, calc(100vw - 24px)); max-height: 60vh; overflow: auto; background: var(--surface-1);
           border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; box-shadow: 0 6px 24px #0003; }
   #runs.open { display: block; }
+  body[data-view="review"] #viewbtn { display: none; }
+  #viewbtn[data-active="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
+  #viewpop { display: none; position: fixed; right: 12px; top: calc(52px + env(safe-area-inset-top)); z-index: 6;
+             width: min(340px, calc(100vw - 24px)); background: var(--surface-1); border: 1px solid var(--border);
+             border-radius: 8px; padding: 10px 12px; box-shadow: 0 6px 24px #0003; }
+  #viewpop.open { display: grid; gap: 10px; }
+  #viewpop .vh { margin: 0; font-size: 12px; color: var(--text-secondary); }
+  #viewpop .muted { margin: 0; }
+  #viewpop label { display: flex; gap: 8px; align-items: center; }
+  #rangeseg { display: flex; }
+  #rangeseg button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
+  #graph.notitles text:not(.land) { display: none; }
+  #themestrip { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 2; display: flex; gap: 6px;
+                align-items: center; pointer-events: none; }
+  #themestrip > * { pointer-events: auto; }
+  #themestrip .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0; flex: 1;
+                       padding: 2px; }
+  #themestrip .chips::-webkit-scrollbar { display: none; }
+  #themestrip button { white-space: nowrap; border-radius: 999px; padding: 4px 10px; font-size: 13px;
+                       background: var(--surface-1); box-shadow: 0 1px 4px #0002; }
+  #themestrip button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
+  #themestrip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  #graph { position: relative; }
   #runs .run { border-top: 1px solid var(--border); padding: 6px 0; font-size: 13px; }
   #runs .run:first-of-type { border-top: 0; }
   #runs .msg { color: var(--text-secondary); white-space: pre-wrap; }
@@ -182,6 +205,11 @@
   #adddlg::backdrop { background: #0006; }
   #adddlg .editor { margin: 0; border: 0; }
   #adddlg h2 { font-size: 16px; margin: 0 0 4px; }
+  .themetools { display: flex; gap: 14px; margin: -4px 0 8px; }
+  .ideathemes { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; margin: 0 0 10px; }
+  .tchip { display: inline-flex; gap: 4px; border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+  #filer .editor, #themeedit .editor { gap: 6px; }
+  #filer .linkbtn, #themeedit [data-into] { display: block; text-align: left; padding: 4px 0; }
   .newbtn[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   .tag { font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--text-secondary); }
   #panel .conn { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; }
@@ -197,6 +225,7 @@
 
   #legendbtn { display: none; }
   #sheetbar { display: none; }
+  @media (max-width: 760px) { #themestrip { display: none !important; } }
   @media (max-width: 760px) {
     /* On a phone the legend folds away behind a button, and the map gets the whole screen. Themes and ideas live in
        a bottom sheet over it: a bar when lowered, half the screen when an idea is tapped, all of it to read. Drag
@@ -250,6 +279,7 @@
   <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas"
          style="display:none">
   <button id="addbtn" aria-haspopup="dialog">+ Idea</button>
+  <button id="viewbtn" aria-haspopup="true" aria-expanded="false">View</button>
   <button class="status" id="status" aria-haspopup="true" aria-expanded="false"></button>
   <span class="sync" id="sync" role="status"></span>
   <span class="seg map-only" role="group" aria-label="Map style"><button data-mode="graph">Graph</button><button
@@ -264,7 +294,8 @@
 <main data-view="review">
   <section id="review" aria-live="polite"></section>
   <section id="mapview"><div id="graph"></div><aside id="panel" data-sheet="peek" aria-label="Themes and ideas">
-    <div id="sheetbar"><span class="grip" aria-hidden="true"></span><span id="sheettitle">Themes</span>
+    <div id="sheetbar"><span class="grip" aria-hidden="true"></span><button id="sheetprev" aria-label="Previous theme"
+      >‹</button><span id="sheettitle">Themes</span><button id="sheetnext" aria-label="Next theme">›</button>
       <button id="sheetsize" aria-label="Expand">⤢</button><button id="sheetclose" aria-label="Lower">✕</button></div>
     <div id="panelbody"></div></aside></section>
   <section id="timeline"></section>
@@ -272,6 +303,15 @@
 </main>
 <div class="tip" id="tip"></div>
 <div id="runs" role="dialog" aria-label="Recent runs"></div>
+<div id="viewpop" role="dialog" aria-label="What to show">
+  <p class="vh">Time</p>
+  <div class="seg" id="rangeseg" role="group" aria-label="Time"><button data-range="all">All</button><button
+    data-range="90">90 days</button><button data-range="30">30 days</button><button data-range="7">7 days</button></div>
+  <label><input type="checkbox" id="v-star"> Starred only</label>
+  <label><input type="checkbox" id="v-titles"> Idea titles on the map</label>
+  <p class="muted">Applies to the map, Time and List. Archive ideas count by when they were said again, not when
+    they were imported.</p>
+</div>
 <div class="toast" id="toast" role="status"></div>
 <dialog id="adddlg" aria-labelledby="addh"><form method="dialog" class="editor">
   <h2 id="addh">New idea</h2>
@@ -341,6 +381,8 @@ function applyEvent(st, e) {
     if (st.review.items.length < was) st.review.total = Math.max(0, st.review.total - 1);
     for (const d of Object.values(st.ideas)) for (const ev of d.evidence) if (ev.item_id === e.item_id)
       Object.assign(ev, {verdict, how: e.bulk ? "bulk" : e.audit ? "audit" : "one"});
+  } else if (["rename_theme", "merge_theme", "split_theme", "file_idea", "unfile_idea"].includes(e.kind)) {
+    applyThemeEvent(st, e);
   } else if (e.kind.endsWith("_theme")) {
     const t = st.graph.themes.find(t => t.id === e.theme_id);
     if (t) e.kind === "reject_theme" ? t.rejected = true : t.pinned = e.kind === "pin_theme";
@@ -366,6 +408,33 @@ function applyEvent(st, e) {
   // The review card names the capture's idea; keep it in step with corrections.
   for (const item of st.review.items) if (item.idea?.id === e.idea_id && idea)
     Object.assign(item.idea, {title: idea.title, statement: idea.statement, note: idea.my_note});
+}
+
+// Shaping themes (slice 4). Ideas name their themes, so a rename rewrites those names; counts follow the ideas.
+function applyThemeEvent(st, e) {
+  const byId = i => st.graph.themes.find(t => t.id === i);
+  const everyIdea = [...st.graph.nodes, ...Object.values(st.ideas)];
+  const swap = (x, from, to) => { x.themes = [...new Set(x.themes.map(n => n === from ? to : n).filter(Boolean))]; };
+  const t = byId(e.theme_id);
+  if (e.kind === "rename_theme" && t) {
+    everyIdea.forEach(x => swap(x, t.name, e.name));
+    t.name = e.name;
+  } else if (e.kind === "merge_theme" && t && byId(e.into)) {
+    everyIdea.forEach(x => swap(x, t.name, byId(e.into).name));
+    st.graph.themes = st.graph.themes.filter(x => x !== t);
+  } else if (e.kind === "split_theme" && t) {
+    const fresh = byId(e.new_theme_id) || {id: e.new_theme_id, name: e.name, description: null, pinned: true,
+                                            proposed: false, ideas: 0};
+    if (!byId(fresh.id)) st.graph.themes.push(fresh);
+    everyIdea.filter(x => e.idea_ids.includes(x.id)).forEach(x => swap(x, t.name, fresh.name));
+  } else if (e.kind === "file_idea" || e.kind === "unfile_idea") {
+    const theme = byId(e.theme_id);
+    if (theme) everyIdea.filter(x => x.id === e.idea_id).forEach(x => {
+      x.themes = x.themes.filter(n => n !== theme.name);
+      if (e.kind === "file_idea") x.themes.push(theme.name);
+    });
+  }
+  for (const th of st.graph.themes) th.ideas = st.graph.nodes.filter(n => n.themes.includes(th.name)).length;
 }
 
 function rebuild() {
@@ -856,7 +925,49 @@ document.addEventListener("keydown", e => {   // on a keyboard: k keep, * star, 
 // --- Map and list ------------------------------------------------------------------------------------------
 
 const query = () => document.getElementById("search").value.trim().toLowerCase();
-const hit = n => (!onlyNew || isNew(n)) && (!query() || (n.title + " " + n.statement).toLowerCase().includes(query()));
+const hit = n => inView(n) && (!onlyNew || isNew(n)) && (!query() || (n.title + " " + n.statement).toLowerCase().includes(query()));
+
+// --- What to show: a time range and starred only, for the map, Time and List; titles on the map -------------
+// An idea is in a time range when it was said in it (any capture) or, for one I added, made in it. Archive ideas
+// count only by captures that matched them: their import date isn't when I had them.
+let range = store.get("range") || "all", starOnly = store.get("staronly") === "1", titles = store.get("titles") !== "0";
+const cutoff = () => range === "all" ? null : Date.now() - +range * 864e5;
+const times = n => [...(state.ideas[n.id]?.evidence || []).map(e => Date.parse(e.said_at)),
+                    ...(n.origin === "mine" ? [Date.parse(n.created_at)] : [])];
+const inRange = n => { const c = cutoff(); return c == null || times(n).some(t => t >= c); };
+const inView = n => inRange(n) && (!starOnly || n.starred);
+const viewActive = () => range !== "all" || starOnly;
+
+function renderView() {
+  const b = document.getElementById("viewbtn");
+  b.textContent = ["View", range !== "all" && `${range} days`, starOnly && "\u2605"].filter(Boolean).join(" \u00b7 ");
+  b.dataset.active = viewActive();
+  document.querySelectorAll("#rangeseg button").forEach(x => x.setAttribute("aria-pressed", x.dataset.range === range));
+  document.getElementById("v-star").checked = starOnly;
+  document.getElementById("v-titles").checked = titles;
+  document.getElementById("graph").classList.toggle("notitles", !titles);
+}
+document.getElementById("viewbtn").addEventListener("click", e => {
+  const open = document.getElementById("viewpop").classList.toggle("open");
+  e.currentTarget.setAttribute("aria-expanded", open);
+});
+document.addEventListener("click", e => {   // a tap elsewhere closes it
+  if (!e.target.closest("#viewpop, #viewbtn")) {
+    document.getElementById("viewpop").classList.remove("open");
+    document.getElementById("viewbtn").setAttribute("aria-expanded", false);
+  }
+});
+const viewChanged = () => { renderView(); if (state) { renderCounts(); redrawMap(); filter(); } };
+document.querySelectorAll("#rangeseg button").forEach(b => b.addEventListener("click", () => {
+  range = b.dataset.range; store.set("range", range); viewChanged();
+}));
+document.getElementById("v-star").addEventListener("change", e => {
+  starOnly = e.target.checked; store.set("staronly", starOnly ? "1" : "0"); viewChanged();
+});
+document.getElementById("v-titles").addEventListener("change", e => {
+  titles = e.target.checked; store.set("titles", titles ? "1" : "0"); renderView();
+});
+renderView();
 
 function renderCounts() {
   const {nodes, links} = state.graph;
@@ -905,9 +1016,42 @@ function filter() {
   if (mapNodes) mapNodes.attr("opacity", n => lit(n) ? 1 : 0.15);
   if (mapLabels) mapLabels.attr("opacity", n => lit(n) ? 1 : 0.2);
   if (mapEdges) mapEdges.attr("stroke-opacity", l => !b || crossLink(l) ? 1 : 0.1);
+  renderStrip();
   renderList();
   renderTimeline();
 }
+
+// Theme by theme: a strip over the map to step through the themes (‹ ›) or jump to one; All shows the whole map.
+function renderStrip() {
+  const box = document.getElementById("graph");
+  if (!mapNodes || !box.querySelector("svg")) return;
+  let strip = document.getElementById("themestrip");
+  if (!strip) { strip = document.createElement("div"); strip.id = "themestrip"; box.append(strip); }
+  const themes = state.graph.themes.filter(t => !t.rejected);
+  const at = themes.findIndex(t => t.id === shownTheme);
+  strip.innerHTML = `<button data-step="-1" aria-label="Previous theme">\u2039</button><div class="chips">` +
+    `<button data-strip="" aria-pressed="${at < 0}">All</button>` +
+    themes.map(t => `<button data-strip="${t.id}" aria-pressed="${t.id === shownTheme}"><span class="dot"
+      style="background:${themeSlot(t.name)}"></span>${esc(t.name)}</button>`).join("") +
+    `</div><button data-step="1" aria-label="Next theme">\u203a</button>`;
+  strip.querySelectorAll("[data-strip]").forEach(b => b.addEventListener("click", () => goTheme(b.dataset.strip)));
+  strip.querySelectorAll("[data-step]").forEach(b => b.addEventListener("click", () => stepTheme(+b.dataset.step)));
+  const chips = strip.querySelector(".chips"), on = strip.querySelector('[aria-pressed="true"]');
+  if (on) chips.scrollLeft = on.offsetLeft - chips.clientWidth / 2 + on.offsetWidth / 2;
+}
+function goTheme(themeId) {
+  if (themeId) { showTheme(themeId); return; }
+  renderThemes();
+  zoomTo(state.graph.nodes.filter(n => n.x != null));
+}
+function stepTheme(by) {   // All sits before the first theme and after the last
+  const themes = state.graph.themes.filter(t => !t.rejected);
+  const at = themes.findIndex(t => t.id === shownTheme), next = at < 0 ? (by > 0 ? 0 : themes.length - 1) : at + by;
+  goTheme(next < 0 || next >= themes.length ? "" : themes[next].id);
+}
+// On a phone the strip would sit under the sheet, so the sheet's title bar steps instead.
+document.getElementById("sheetprev").addEventListener("click", () => stepTheme(-1));
+document.getElementById("sheetnext").addEventListener("click", () => stepTheme(1));
 document.getElementById("search").addEventListener("input", filter);
 
 // --- Time ------------------------------------------------------------------------------------------------
@@ -919,8 +1063,9 @@ function renderTimeline() {
   if (document.body.dataset.view !== "time" || !state) return;
   const box = document.getElementById("timeline");
   const phone = matchMedia("(max-width: 760px)").matches;
+  const from = cutoff() ?? -Infinity;   // in a time range, only the times inside it
   const rows = state.graph.nodes.filter(hit).map(n => ({n, ts: (state.ideas[n.id]?.evidence || [])
-      .map(e => ({t: Date.parse(e.said_at), e})).sort((a, b) => a.t - b.t)}))
+      .map(e => ({t: Date.parse(e.said_at), e})).filter(x => x.t >= from).sort((a, b) => a.t - b.t)}))
     .filter(r => r.ts.length);
   const sort = store.get("tsort") || (state.digests?.length ? "week" : "recurring");
   renderDigestBadge();
@@ -933,7 +1078,7 @@ function renderTimeline() {
   const W = Math.max(160, box.clientWidth - 32 - (phone ? 0 : label + 12)), R = 5;
   const all = rows.flatMap(r => r.ts.map(x => x.t));
   if (!all.length) { box.innerHTML = `<p class="intro">No captured ideas match.</p>`; return; }
-  const x = d3.scaleTime().domain([Math.min(...all), Date.now()]).range([R, W - R]).nice();
+  const x = d3.scaleTime().domain([cutoff() ?? Math.min(...all), Date.now()]).range([R, W - R]).nice();
   const fmt = d3.timeFormat("%b %-d");
   const ticks = x.ticks(phone ? 4 : 8);
   const say = e => `${day(e.said_at)} \u00b7 ${e.said_by}: \u201c${e.quote.length > 140 ? e.quote.slice(0, 139) + "\u2026" : e.quote}\u201d`;
@@ -1114,6 +1259,11 @@ function drawMap() {
   // Starred ideas are always named, and new ones too while there are few enough to read.
   const fresh = nodes.filter(isNew);
   nodes.forEach(n => { if (n.starred || (fresh.length <= 12 && isNew(n))) labelled.add(n.id); });
+  if (viewActive()) {   // a narrowed view names what's in it, if that's few enough to read
+    const lit = nodes.filter(inView);
+    labelled.clear();
+    [...lit].sort((a, b) => degree[b.id] - degree[a.id]).slice(0, 20).forEach(n => labelled.add(n.id));
+  }
 
   const box = document.getElementById("graph");
   const W = box.clientWidth, H = box.clientHeight;
@@ -1366,6 +1516,10 @@ function showTheme(themeId) {
       (t.proposed && !t.pinned && !t.rejected ? ` <button data-act="pin_theme">Pin</button> <button data-act="reject_theme">Reject</button>` : "") +
       (t.pinned && t.proposed ? ` <button data-act="unpin_theme">Unpin</button>` : "") + `</p>` +
     `<h2>${esc(t.name)}</h2>` +
+    `<p class="themetools"><button class="linkbtn" id="th-rename">Rename</button> ` +
+      `<button class="linkbtn" id="th-merge">Merge into\u2026</button> ` +
+      (ideas.length > 1 ? `<button class="linkbtn" id="th-split">Split\u2026</button>` : "") + `</p>` +
+    `<div id="themeedit"></div>` +
     (t.description ? `<p class="statement">${esc(t.description)}</p>` : "") +
     `<p class="meta">${ideas.length} idea${ideas.length === 1 ? "" : "s"}${status ? ` · ${status}` : ""}` +
       (ideas.length > 1 ? ` · ${draftLink(`my Lattice theme "${t.name}"`)}` : "") + `</p>` +
@@ -1380,8 +1534,62 @@ function showTheme(themeId) {
     showTheme(themeId);
   }));
   body.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go, themeId)));
+  themeTools(t, ideas);
   filter();
   zoomTo(ideas);
+}
+
+// Rename, merge into another theme, or split some ideas off into a new theme of mine.
+function themeTools(t, ideas) {
+  const box = document.getElementById("themeedit");
+  const taken = name => state.graph.themes.some(x => x.id !== t.id && x.name.toLowerCase() === name.toLowerCase());
+  const done = async (event, then) => { await act(event); saved(); redrawMap(); renderList(); then(); };
+  document.getElementById("th-rename").addEventListener("click", () => {
+    box.innerHTML = `<div class="editor"><label>Name<input id="th-name" maxlength="80" value="${esc(t.name)}"></label>
+      <div class="edrow"><button id="th-ok">Rename</button><button id="th-no">Cancel</button></div></div>`;
+    const input = box.querySelector("#th-name");
+    input.focus(); input.select();
+    box.querySelector("#th-no").addEventListener("click", () => box.innerHTML = "");
+    box.querySelector("#th-ok").addEventListener("click", () => {
+      const name = input.value.trim();
+      if (!name || name === t.name) { box.innerHTML = ""; return; }
+      if (taken(name)) { toast("Another theme has that name"); return; }
+      done({kind: "rename_theme", theme_id: t.id, name}, () => showTheme(t.id));
+    });
+  });
+  document.getElementById("th-merge").addEventListener("click", () => {
+    const others = state.graph.themes.filter(x => x.id !== t.id && !x.rejected);
+    box.innerHTML = `<div class="editor"><span class="muted">Merge into which theme? Its ${ideas.length} idea${ideas.length === 1 ? "" : "s"}
+      join it, and "${esc(t.name)}" goes away.</span>
+      ${others.map(x => `<button class="linkbtn" data-into="${x.id}">${esc(x.name)} \u00b7 ${x.ideas}</button>`).join("")}
+      <div class="edrow"><button id="th-no">Cancel</button></div></div>`;
+    box.querySelector("#th-no").addEventListener("click", () => box.innerHTML = "");
+    box.querySelectorAll("[data-into]").forEach(b => b.addEventListener("click", () => {
+      const into = b.dataset.into;
+      if (confirm(`Merge "${t.name}" into "${state.graph.themes.find(x => x.id === into).name}"?`))
+        done({kind: "merge_theme", theme_id: t.id, into}, () => showTheme(into));
+    }));
+  });
+  document.getElementById("th-split")?.addEventListener("click", () => {
+    box.innerHTML = `<div class="editor"><label>New theme<input id="th-new" maxlength="80" placeholder="Its name"></label>
+      <span class="muted">Tick the ideas that move to it.</span>
+      <ul class="rest">${ideas.map(n => `<li><label><input type="checkbox" value="${n.id}"><span>${esc(n.title)}</span></label></li>`).join("")}</ul>
+      <div class="edrow"><button id="th-ok" disabled>Split off 0</button><button id="th-no">Cancel</button></div></div>`;
+    const ok = box.querySelector("#th-ok"), name = box.querySelector("#th-new");
+    const picked = () => [...box.querySelectorAll("input[type=checkbox]:checked")].map(c => c.value);
+    const update = () => { const n = picked().length; ok.textContent = `Split off ${n}`; ok.disabled = !n || !name.value.trim(); };
+    box.addEventListener("input", update);
+    name.focus();
+    box.querySelector("#th-no").addEventListener("click", () => box.innerHTML = "");
+    ok.addEventListener("click", () => {
+      if (taken(name.value.trim()) || name.value.trim().toLowerCase() === t.name.toLowerCase()) {
+        toast("Another theme has that name"); return;
+      }
+      const fresh = crypto.randomUUID();
+      done({kind: "split_theme", theme_id: t.id, name: name.value.trim(), idea_ids: picked(), new_theme_id: fresh},
+           () => showTheme(fresh));
+    });
+  });
 }
 
 // Fit the map to some ideas, leaving room for the sheet on a phone.
@@ -1425,7 +1633,10 @@ function show(ideaId, viaTheme) {
       `<i>${esc(d.claude_title)}</i> — ${esc(d.claude_statement)}</p>` : "") +
     `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : d.origin === "mine" ? "Added by you"
       : "Captured from conversation"}` +
-    `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
+    `</p><p class="ideathemes">${d.themes.map(name => { const th = state.graph.themes.find(x => x.name === name);
+        return th ? `<span class="tchip"><button class="linkbtn" data-theme="${th.id}">${esc(name)}</button><button
+          class="linkbtn" data-unfile="${th.id}" aria-label="Take out of ${esc(name)}">\u00d7</button></span>` : esc(name); }).join("")}
+      <button class="linkbtn" id="fileidea">+ Theme</button></p><div id="filer"></div>` +
     (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
     (bridges().has(ideaId) ? `<p class="meta">Bridges ${bridges().get(ideaId).spans.map(esc).join(" \u2194 ")}</p>` : "") +
     (d.ranking ? `<p class="meta">Score ${d.ranking.score.toFixed(2)} · generality ${d.ranking.generality} · ` +
@@ -1452,6 +1663,19 @@ function show(ideaId, viaTheme) {
     redrawMap(); renderList(); show(ideaId);
   });
   panel.querySelector("#linkidea").addEventListener("click", () => linker(ideaId));
+  // Filing by hand: open a theme, take the idea out of one, or put it into another.
+  const refile = async event => { await act(event); saved(); redrawMap(); renderList(); show(ideaId, viaTheme); };
+  panel.querySelectorAll("[data-theme]").forEach(b => b.addEventListener("click", () => showTheme(b.dataset.theme)));
+  panel.querySelectorAll("[data-unfile]").forEach(b => b.addEventListener("click", () =>
+    refile({kind: "unfile_idea", idea_id: ideaId, theme_id: b.dataset.unfile})));
+  panel.querySelector("#fileidea").addEventListener("click", () => {
+    const box = panel.querySelector("#filer");
+    const options = state.graph.themes.filter(t => !t.rejected && !d.themes.includes(t.name));
+    box.innerHTML = `<div class="editor"><span class="muted">Put it into:</span>${options.map(t =>
+      `<button class="linkbtn" data-file="${t.id}">${esc(t.name)}</button>`).join("") || `<span class="muted">It's in every theme.</span>`}</div>`;
+    box.querySelectorAll("[data-file]").forEach(b => b.addEventListener("click", () =>
+      refile({kind: "file_idea", idea_id: ideaId, theme_id: b.dataset.file})));
+  });
   panel.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go)));
   panel.querySelectorAll("[data-unlink]").forEach(b => b.addEventListener("click", async () => {
     await act({kind: "unlink", idea_id: ideaId, other_idea_id: b.dataset.unlink});

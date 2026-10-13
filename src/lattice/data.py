@@ -262,6 +262,8 @@ def audit(items: list[dict], n: int = AUDIT) -> list[str]:
 EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_id",
           "star": "idea_id", "unstar": "idea_id", "idea_correct": "idea_id", "idea_note": "idea_id",
           "pin_theme": "theme_id", "unpin_theme": "theme_id", "reject_theme": "theme_id",
+          "rename_theme": "theme_id", "merge_theme": "theme_id", "split_theme": "theme_id",
+          "file_idea": "idea_id", "unfile_idea": "idea_id",
           "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id", "idea_add": "idea_id",
           "digest_star": None, "digest_dismiss": None}   # a digest point: payload digest_id and point
 WINNERS = ("first", "second", "tie")
@@ -305,6 +307,25 @@ def record(conn, event: dict, source: str = "lattice") -> int:
         links = sorted({str(UUID(str(x))) for x in links} - {ref})
         if links:
             payload["link_to"] = links
+    elif kind == "rename_theme":
+        payload = {"name": str(event.get("name") or "").strip()[:80]}
+        if not payload["name"]:
+            raise ValueError("a theme needs a name")
+    elif kind == "merge_theme":   # theme_id is absorbed into `into`
+        payload = {"into": str(UUID(str(event.get("into", ""))))}
+        if payload["into"] == ref:
+            raise ValueError("a theme can't merge into itself")
+    elif kind == "split_theme":   # these ideas leave theme_id for a new theme of mine
+        ideas = event.get("idea_ids")
+        if not isinstance(ideas, list) or not 1 <= len(ideas) <= 500:
+            raise ValueError("idea_ids: the ideas that move to the new theme")
+        payload = {"name": str(event.get("name") or "").strip()[:80], "idea_ids": sorted({str(UUID(str(x))) for x in ideas})}
+        if not payload["name"]:
+            raise ValueError("the new theme needs a name")
+        # Made by the client, so the app shows the theme (and can rename or file into it) before a sync.
+        payload["new_theme_id"] = str(UUID(str(event.get("new_theme_id", ""))))
+    elif kind in ("file_idea", "unfile_idea"):   # one idea into or out of one theme, by hand: theme_id goes below
+        str(UUID(str(event.get("theme_id", ""))))
     other = None
     if kind in ("link", "unlink", "idea_compare"):   # links are undirected; a comparison keeps the order shown
         other = str(UUID(str(event.get("other_idea_id", ""))))
@@ -316,7 +337,12 @@ def record(conn, event: dict, source: str = "lattice") -> int:
         payload = {"winner": event["winner"]}
         if str(event.get("note") or "").strip():
             payload["note"] = str(event["note"]).strip()[:500]
+    theme = str(UUID(str(event["theme_id"]))) if kind in ("file_idea", "unfile_idea") else None
     try:
+        if theme:   # filing names both the idea and the theme, each in its own column
+            return conn.execute(
+                """INSERT INTO pub.feedback_events (kind, idea_id, theme_id, payload, source)
+                   VALUES (%s, %s, %s, '{}', %s) RETURNING event_id""", (kind, ref, theme, source)).fetchone()[0]
         return conn.execute(
             f"""INSERT INTO pub.feedback_events (kind, {target}, other_idea_id, payload, source)
                 VALUES (%s, %s, %s, %s, %s) RETURNING event_id""",

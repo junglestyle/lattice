@@ -28,6 +28,12 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   embeds, places and files it on its next run.
 - **Draft with Claude** (on a theme, and on each digest point): opens claude.ai with the request written (and
   copied), where `draft_material` gathers the ideas and Claude asks what to make before writing.
+- **Shape themes** (slice 4): in a theme, Rename, Merge into…, or Split… (tick ideas into a new theme of yours);
+  in an idea's panel, take it out of a theme (×) or put it into another (+ Theme). Idea Machine applies them as they
+  arrive (its migration 024), and the app applies them to its copy at once.
+- **View**: a time range (all, 90, 30 or 7 days: by when an idea was said, or made if you added it) and starred only,
+  for the map, Time and List; and idea titles on or off on the map. A strip over the map steps through the themes
+  (on a phone, ‹ › in the sheet's title bar).
 - **Week** (in the Time tab): Idea Machine's weekly digest (`pub.digests`): a summary, then points (what keeps
   coming up, what converges, sleepers, projects forming, what a stranger would value), each with its ideas as chips
   that open the map, and ★ Worth it / Not useful (`digest_star` / `digest_dismiss`). A dot on the tab marks a new one.
