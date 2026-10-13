@@ -33,6 +33,9 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   arrive (its migration 024), and the app applies them to its copy at once.
 - **Time → Themes**: a theme stream, each theme a band over the days or weeks, as thick as how often its ideas came
   up (a capture shared among its idea's themes). Follows the View; tap a band or its key to open the theme.
+- **Export as Markdown** (in the run-status panel): the whole lattice as a zip that opens as an Obsidian vault: a
+  file per idea (properties, statement, notes, [[links]] to its connections, quotes), per theme and per digest, and
+  an index. It's your own copy, so speakers keep their names.
 - **View**: a time range (all, 90, 30 or 7 days: by when an idea was said, or made if you added it) and starred only,
   for the map, Time and List; and idea titles on or off on the map. A strip over the map steps through the themes
   (on a phone, ‹ › in the sheet's title bar).

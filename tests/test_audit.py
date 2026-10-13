@@ -264,3 +264,26 @@ def test_shaping_themes_by_conversation():
     finally:
         conn.rollback()
         conn.close()
+
+
+@needs_db
+def test_markdown_export(url):
+    import io
+    import re
+    import zipfile
+
+    assert request(url + "/api/export")[0] == 401
+    status, headers, body = request(url + "/api/export", login(url))
+    assert status == 200
+    z = zipfile.ZipFile(io.BytesIO(body))
+    names = z.namelist()
+    snap = json.loads(request(url + "/api/snapshot", login(url))[2])
+    assert "Lattice/Lattice.md" in names
+    assert sum(n.startswith("Lattice/ideas/") for n in names) == len(snap["ideas"])
+    assert sum(n.startswith("Lattice/themes/") for n in names) == len(snap["graph"]["themes"])
+    files = {n.removeprefix("Lattice/").rsplit("/", 1)[-1].removesuffix(".md") for n in names}
+    for n in names:   # every [[link]] lands on a file in the vault
+        for target in re.findall(r"\[\[([^\]|]+)", z.read(n).decode()):
+            assert target in files, (n, target)
+    one = z.read(next(n for n in names if n.startswith("Lattice/ideas/"))).decode()
+    assert one.startswith("---\nid: ") and "\n# " in one

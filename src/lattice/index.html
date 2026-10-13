@@ -574,6 +574,8 @@ function renderStatus() {
         ${when(r.started_at)} · ${r.captured} captured · ${r.read} read · ${money(r.cost)}</div>
         ${r.error ? `<div class="msg">${esc(r.error)}</div>` : ""}
         ${r.warnings.map(w => `<div class="msg">${esc(w)}</div>`).join("")}</div>`).join("") +
+    `<p class="muted"><a href="/api/export" download>Export as Markdown</a> (every idea, theme and digest; opens as
+       an Obsidian vault)</p>` +
     `<p class="muted"><a href="/logout">Log out</a> (also clears the copy on this device)</p>`;
 }
 

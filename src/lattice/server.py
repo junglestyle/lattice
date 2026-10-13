@@ -5,6 +5,7 @@ over HTTPS. Never bind it to the LAN or the internet, since evidence quotes incl
 """
 
 import argparse
+import datetime
 import html
 import json
 import threading
@@ -12,7 +13,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
-from lattice import auth, data, mcp, oauth
+from lattice import auth, data, export, mcp, oauth
 
 HERE = resources.files("lattice")
 STATIC = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
@@ -156,6 +157,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(data.review(conn))
                 elif path == "/api/status":
                     self._json(data.status(conn))
+                elif path == "/api/export":   # the whole lattice as Markdown, mine to keep
+                    self._send(200, export.build(conn), "application/zip",
+                               {"Content-Disposition": f'attachment; filename="lattice-{datetime.date.today()}.zip"'})
                 elif path.startswith("/api/idea/"):
                     found = data.idea(conn, path.removeprefix("/api/idea/"))
                     self._json(found or {"error": "no such idea"}, 200 if found else 404)
