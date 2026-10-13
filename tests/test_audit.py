@@ -82,3 +82,11 @@ def test_review_by_conversation(url, admin):
         assert rows.count(("item_keep", {"bulk": True}, "mcp")) == len(rest)
     finally:
         admin.execute("DELETE FROM pub.feedback_events WHERE event_id > %s AND source = 'mcp'", (before,))
+
+
+@needs_db
+def test_evidence_says_how_its_verdict_was_made():
+    with data.connect() as conn:
+        evidence = [ev for evs in data.evidence_of(conn).values() for ev in evs]
+    assert evidence and all(ev["how"] in (None, "one", "audit", "bulk") for ev in evidence)
+    assert all(ev["how"] is None for ev in evidence if ev["verdict"] is None)

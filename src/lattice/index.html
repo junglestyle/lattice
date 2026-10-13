@@ -311,7 +311,8 @@ function applyEvent(st, e) {
     const was = st.review.items.length;
     st.review.items = st.review.items.filter(i => i.id !== e.item_id);
     if (st.review.items.length < was) st.review.total = Math.max(0, st.review.total - 1);
-    for (const d of Object.values(st.ideas)) for (const ev of d.evidence) if (ev.item_id === e.item_id) ev.verdict = verdict;
+    for (const d of Object.values(st.ideas)) for (const ev of d.evidence) if (ev.item_id === e.item_id)
+      Object.assign(ev, {verdict, how: e.bulk ? "bulk" : e.audit ? "audit" : "one"});
   } else if (e.kind.endsWith("_theme")) {
     const t = st.graph.themes.find(t => t.id === e.theme_id);
     if (t) e.kind === "reject_theme" ? t.rejected = true : t.pinned = e.kind === "pin_theme";
@@ -504,7 +505,8 @@ function queue() {
 function renderReview() {
   const {items, total} = state.review;
   document.getElementById("badge").textContent = total ? `· ${total}` : "";
-  const key = showBatch() ? `batch:${rest().length}` : queue()[0]?.id;
+  const key = showBatch() ? `batch:${rest().length}` : queue()[0]?.id
+    ?? (revisiting ? `look:${secondLook()[0]?.ev.item_id}` : undefined);
   if (key !== cardId || (!items.length && !comparing)) renderCard();
 }
 
@@ -617,12 +619,17 @@ function renderCard() {
   const checks = queue().filter(i => spot().has(i.id)).map(i => i.id), check = checks.indexOf(item?.id);
   const isCheck = check >= 0 && (shownChecks().some(id => live().has(id)) || snap.review.total > snap.review.audit?.length);
   if (!item && comparing) { renderCompare(); return; }
+  if (!item && revisiting) { renderRevisit(); return; }
   if (!item) {
+    const look = secondLook().length;
     box.innerHTML = `<div class="done"><p>${state.review.total ? "That's all this device holds; more on the next sync."
                                           : "Nothing waiting. New captures arrive with each hourly run."}</p>
+      ${look ? `<p><button id="look-start">Look again at ${look} kept unread</button></p>
+        <p class="muted">Kept with the rest without reading, and they've since turned out to matter.</p>` : ""}
       ${nextPair() ? `<p><button id="cmp-start">Compare ideas two at a time</button></p>
         <p class="muted">Which of two is better? It tunes how Idea Machine ranks your ideas.</p>` : ""}</div>`;
     box.querySelector("#cmp-start")?.addEventListener("click", () => { comparing = true; renderCompare(); });
+    box.querySelector("#look-start")?.addEventListener("click", () => { revisiting = true; renderRevisit(); });
     return;
   }
   box.innerHTML = `<article class="card">
@@ -678,6 +685,87 @@ function renderCard() {
   });
   document.getElementById("fix")?.addEventListener("click", () =>
     editor(document.getElementById("cardedit"), item.idea, renderCard));
+}
+
+// --- Kept unread -------------------------------------------------------------------------------------------
+// Captures kept in bulk without reading (pub.evidence.how = 'bulk') get a real verdict once their idea turns out
+// to matter: I linked it, it evolves another idea or echoes the archive, it bridges themes, it came up in a
+// comparison, or it was said again. ('related' alone doesn't count: Idea Machine finds those for nearly everything.)
+// The verdict is an ordinary one; Idea Machine keeps the newest. Discards matter most: I keep by default.
+
+let revisiting = false;
+const unread = ev => ev.verdict === "keep" && ev.how === "bulk";
+
+function mattered(ideaId) {
+  const why = [];
+  const kinds = new Set(state.graph.links.filter(l => id(l.source) === ideaId || id(l.target) === ideaId).map(l => l.kind));
+  if (kinds.has("mine")) why.push("you linked it");
+  if (kinds.has("evolves")) why.push("it evolves another idea");
+  if (kinds.has("archive")) why.push("it echoes your archive");
+  if (bridges().has(ideaId)) why.push(`it bridges ${bridges().get(ideaId).spans.join(" \u2194 ")}`);
+  if ((state.compared || []).some(p => p.includes(ideaId))) why.push("it came up in a comparison");
+  if ((state.ideas[ideaId]?.evidence.length || 0) > 1) why.push("it was said again");
+  return why;
+}
+
+function secondLook() {
+  const out = [];
+  for (const d of Object.values(state.ideas)) {
+    const evs = d.evidence.filter(unread);
+    const why = evs.length ? mattered(d.id) : [];
+    if (why.length) evs.forEach(ev => out.push({idea: d, ev, why}));
+  }
+  return out.sort((a, b) => b.why.length - a.why.length || b.ev.said_at.localeCompare(a.ev.said_at));
+}
+
+function renderRevisit() {
+  const box = document.getElementById("review");
+  const next = secondLook()[0];
+  if (!next) { revisiting = false; renderCard(); return; }
+  const {idea, ev, why} = next;
+  cardId = `look:${ev.item_id}`;
+  box.innerHTML = `<article class="card">
+      <div class="meta"><span>kept unread</span><span>${esc(ev.kind)}</span><span>${esc(ev.said_by)}</span>
+        <span>${when(ev.said_at)}</span></div>
+      <p class="quote">“${esc(ev.quote)}”</p>
+      <p class="gist">${esc(ev.gist)}</p>
+      <p class="idea">In the lattice as: <b>${esc(idea.title)}</b> <button class="linkbtn" id="look-open">Open</button></p>
+      <p class="gist">Worth a look now: ${esc(why.join("; "))}.</p>
+    </article>
+    <div class="actions" id="actions">
+      <div class="notes-toggle"><button class="linkbtn" id="look-stop">Done for now</button></div>
+      <div class="why">
+        <div class="chips">${REASONS.map(r => `<button type="button" aria-pressed="false">${r}</button>`).join("")}</div>
+        <input id="why" placeholder="Why discard? (optional; helps tune the prompt)" maxlength="500">
+      </div>
+      <div class="row"><button id="discard">Discard</button><button id="keep">Keep</button><button id="star">★ Star</button></div>
+    </div>`;
+  const actions = document.getElementById("actions"), whyBox = document.getElementById("why");
+  const answer = async kind => {
+    await act({kind, item_id: ev.item_id, note: whyBox.value || undefined});
+    toast({item_keep: "Kept", item_star: "Starred", item_discard: "Discarded"}[kind]);
+    renderRevisit();
+  };
+  actions.querySelectorAll(".chips button").forEach(c => c.addEventListener("click", () => {
+    const on = c.getAttribute("aria-pressed") !== "true";
+    actions.querySelectorAll(".chips button").forEach(o => o.setAttribute("aria-pressed", false));
+    c.setAttribute("aria-pressed", on);
+    whyBox.value = on ? c.textContent : "";
+  }));
+  document.getElementById("discard").addEventListener("click", () => {
+    if (!actions.classList.contains("asking")) {   // first tap asks why; the second confirms
+      actions.classList.add("asking");
+      document.getElementById("discard").textContent = "Discard ✓";
+      document.getElementById("keep").textContent = "Cancel";
+      return;
+    }
+    answer("item_discard");
+  });
+  document.getElementById("keep").addEventListener("click", () =>
+    actions.classList.contains("asking") ? renderRevisit() : answer("item_keep"));
+  document.getElementById("star").addEventListener("click", () => answer("item_star"));
+  document.getElementById("look-stop").addEventListener("click", () => { revisiting = false; renderCard(); });
+  document.getElementById("look-open").addEventListener("click", () => { setTab("map"); show(idea.id); });
 }
 
 const saved = () => toast(navigator.onLine ? "Saved" : "Saved on this device; sends when online");
@@ -1232,8 +1320,8 @@ function show(ideaId, viaTheme) {
         ${c.kind === "mine" ? `<button class="linkbtn" data-unlink="${c.other}">Unlink</button>` : ""}</div>`).join("")}</div>` : "") +
     d.evidence.map(ev => `<div class="ev"><q>${esc(ev.quote)}</q>` +
       `<div class="by">${esc(ev.said_by)} · ${day(ev.said_at)} · ${esc(ev.kind)}` +
-      `${ev.verdict ? ` · ${verdictWord[ev.verdict] || ev.verdict}` : ""}</div>` +
-      (ev.verdict ? "" : `<div class="verdicts" data-item="${ev.item_id}"><button data-v="item_keep">Keep</button>` +
+      `${ev.verdict ? ` · ${verdictWord[ev.verdict] || ev.verdict}${unread(ev) ? " unread" : ""}` : ""}</div>` +
+      (ev.verdict && !unread(ev) ? "" : `<div class="verdicts" data-item="${ev.item_id}"><button data-v="item_keep">Keep</button>` +
         `<button data-v="item_star">★ Star</button><button data-v="item_discard">Discard</button></div>`) +
       `</div>`).join("");
   const panel = document.getElementById("panel");

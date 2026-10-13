@@ -9,7 +9,10 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **Review** with a light touch: five spot checks, picked across Idea Machine's confidence (one per band, by a hash
   of the id, so every device and the MCP server agree), to judge one by one, and **Keep the rest** in one tap.
   Those keeps carry `{"bulk": true}` so Idea Machine can weigh them below a verdict I read; anything I untick stays
-  in the queue. Or go **one by one**, with keep / ★ / discard and one-tap reasons. When the captures
+  in the queue. Once the queue is empty, **Look again** brings back captures kept unread whose idea has since turned
+  out to matter (I linked it, it evolves another idea or echoes the archive, it bridges themes, it came up in a
+  comparison, or it was said again), for a real verdict; discards are the high-signal one while I keep by default.
+  Or go **one by one**, with keep / ★ / discard and one-tap reasons. When the captures
   run out, **compare ideas** two at a time ("which is better?", `idea_compare` events): a steadier signal for Idea
   Machine's ranking than keep and discard. Idea Machine picks the pairs (`pub.compare_pairs`); without them,
   neighbouring scores or a shared theme. The order shown is random and recorded.

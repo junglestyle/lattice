@@ -74,14 +74,19 @@ def idea(conn, idea_id: str) -> dict | None:
 
 
 def evidence_of(conn, idea_id: str | None = None) -> dict:
-    """Evidence by idea: one idea's, or every idea's."""
+    """Evidence by idea: one idea's, or every idea's. `how` is how its verdict was made ('one', 'audit', or 'bulk':
+    kept unread), None before Idea Machine publishes it."""
+    sql = """SELECT idea_id, item_id, kind, said_by, quote, gist, confidence, said_at, verdict, relation, {how}
+             FROM pub.evidence WHERE %(idea)s::uuid IS NULL OR idea_id = %(idea)s ORDER BY said_at"""
+    try:
+        rows = conn.execute(sql.format(how="how"), {"idea": idea_id}).fetchall()
+    except psycopg.errors.UndefinedColumn:
+        rows = conn.execute(sql.format(how="NULL::text"), {"idea": idea_id}).fetchall()
     out: dict = {}
-    for i, item, k, who, q, g, c, at, v, rel in conn.execute(
-            """SELECT idea_id, item_id, kind, said_by, quote, gist, confidence, said_at, verdict, relation
-               FROM pub.evidence WHERE %(idea)s::uuid IS NULL OR idea_id = %(idea)s ORDER BY said_at""",
-            {"idea": idea_id}):
+    for i, item, k, who, q, g, c, at, v, rel, how in rows:
         out.setdefault(i, []).append({"item_id": str(item), "kind": k, "said_by": who, "quote": q, "gist": g,
-                                      "confidence": c, "said_at": at.isoformat(), "verdict": v, "relation": rel})
+                                      "confidence": c, "said_at": at.isoformat(), "verdict": v, "relation": rel,
+                                      "how": how})
     return out
 
 
