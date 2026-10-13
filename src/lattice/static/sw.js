@@ -1,6 +1,6 @@
 // Lattice's service worker: keeps the page (and d3) so the app opens without a network. The data isn't here:
 // the page keeps its own copy of the lattice in IndexedDB and syncs it from /api/snapshot.
-const CACHE = "lattice-shell-v1";
+const CACHE = "lattice-shell-v2";
 const SHELL = ["/", "/manifest.webmanifest", "/apple-touch-icon.png", "/icon-192.png",
                "https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"];
 
