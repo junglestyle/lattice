@@ -17,10 +17,11 @@ from uuid import UUID
 from lattice import data
 
 PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"]   # newest first; the first is offered when the client's isn't
-SERVER = {"name": "lattice", "title": "Lattice", "version": "0.1.0"}
-INSTRUCTIONS = """Lattice is the owner's idea lattice: ideas Idea Machine captured from their recorded conversations
-(and seeded from an old ChatGPT archive), grouped into themes, connected to each other, each backed by evidence
-quotes. Speak to the owner as "you". In quotes, "me" is the owner; S1, S2... are other people, renumbered in every
+SERVER = {"name": "lattice", "title": "Lattice (Idea Machine)", "version": "0.1.0"}
+INSTRUCTIONS = """Lattice is the owner's Idea Machine: when they mention Idea Machine, their lattice, their ideas or
+what they've been thinking or saying lately, use these tools. It holds the ideas Idea Machine captured from their
+recorded conversations (and seeded from an old ChatGPT archive), grouped into themes, connected to each other,
+each backed by evidence quotes. Speak to the owner as "you". In quotes, "me" is the owner; S1, S2... are other people, renumbered in every
 answer. Search or open a theme before asking the owner for ids. Starring, linking and notes are the owner's
 feedback: do them when they ask, not on your own initiative.
 
@@ -411,8 +412,8 @@ def note_idea(conn, idea_id: str, note: str) -> dict:
 
 ID = {"type": "string", "description": "An idea's id, from search_ideas, open_theme, whats_new or get_idea"}
 TOOLS = {
-    "search_ideas": (search_ideas, True, "Find ideas whose title, statement, notes or themes contain every word "
-                     "of the query.",
+    "search_ideas": (search_ideas, True, "Find ideas in the owner's Idea Machine (their lattice) whose title, "
+                     "statement, notes or themes contain every word of the query.",
                      {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 50,
                                                              "default": 10}}, ["query"]),
     "get_idea": (get_idea, True, "One idea in full: statement, your note and corrections, themes, connections, "
@@ -424,10 +425,10 @@ TOOLS = {
     "list_themes": (list_themes, True, "Every theme with its size and whether it's pinned or only proposed.", {}, []),
     "open_theme": (open_theme, True, "The ideas in one theme, starred and best-evidenced first.",
                    {"theme": {"type": "string", "description": "A theme's name (or part of it) or id"}}, ["theme"]),
-    "whats_new": (whats_new, True, "Ideas added since a date (default: the last 7 days), proposed themes waiting "
+    "whats_new": (whats_new, True, "What's new in the owner's Idea Machine: ideas added since a date (default: the last 7 days), proposed themes waiting "
                   "for a decision, and how many captures wait for review.",
                   {"since": {"type": "string", "description": "ISO date or time"}}, []),
-    "review_digest": (review_digest, True, "The captures waiting for review: a few spot checks, picked across "
+    "review_digest": (review_digest, True, "The Idea Machine captures waiting for the owner's review: a few spot checks, picked across "
                       "Idea Machine's confidence for the owner to judge one by one, and the rest summarized for "
                       "keeping in one go. Use when the owner wants to review or catch up.", {}, []),
     "look_again": (look_again, True, "Captures the owner kept in bulk without reading whose idea has since turned "
