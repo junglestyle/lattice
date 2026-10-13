@@ -36,6 +36,10 @@ When the owner wants to add an idea from your conversation: search_ideas first, 
 same, offer a note or a link instead. Otherwise draft a short title and a one-to-three-sentence statement in the
 owner's own terms, read them back, and call add_idea only once they approve the wording.
 
+Themes are the owner's to shape. You may suggest renaming, merging or splitting themes, or filing an idea
+elsewhere, when you notice a theme is muddled, two overlap, or an idea sits in the wrong one; but change them
+(rename_theme, merge_themes, split_theme, file_idea) only once the owner agrees to the specific change.
+
 To draft something from the lattice (an outline, essay, guide, talk), call draft_material for a theme, a digest
 point or a set of ideas, then ask the owner what form, audience and length they want before writing. Write in
 their voice from their ideas; quote them sparingly; say where ideas pull against each other rather than smoothing
@@ -144,16 +148,24 @@ def list_themes(conn) -> dict:
                               ORDER BY pinned DESC, n_ideas DESC, name""")]}
 
 
-def open_theme(conn, theme: str) -> dict:
+def _theme(conn, theme: str) -> tuple:
+    """(id, name, description) of the theme a reference names: its id, its exact name, or else part of its name."""
     row = conn.execute("""SELECT theme_id, name, description FROM pub.themes
                           WHERE theme_id::text = %(t)s OR lower(name) = lower(%(t)s)
                           ORDER BY theme_id::text = %(t)s DESC LIMIT 1""", {"t": str(theme).strip()}).fetchone()
     if row is None:
-        row = conn.execute("SELECT theme_id, name, description FROM pub.themes WHERE name ILIKE %s ORDER BY name LIMIT 1",
-                           (f"%{str(theme).strip()}%",)).fetchone()
+        rows = conn.execute("SELECT theme_id, name, description FROM pub.themes WHERE name ILIKE %s ORDER BY name",
+                            (f"%{str(theme).strip()}%",)).fetchall()
+        if len(rows) > 1:
+            raise ToolError(f"{theme!r} matches several themes: {', '.join(r[1] for r in rows)}; use the full name")
+        row = rows[0] if rows else None
     if row is None:
         raise ToolError(f"no theme matches {theme!r}; list_themes shows them all")
-    tid, name, description = row
+    return str(row[0]), row[1], row[2]
+
+
+def open_theme(conn, theme: str) -> dict:
+    tid, name, description = _theme(conn, theme)
     ideas = conn.execute(f"SELECT {BRIEF} FROM pub.ideas WHERE %s = ANY(themes) ORDER BY starred DESC, n_evidence DESC, title",
                          (name,)).fetchall()
     return {"id": str(tid), "name": name, "description": description, "ideas": [_brief(r) for r in ideas]}
@@ -333,6 +345,60 @@ def rate_digest_point(conn, digest_id: int, point: int, rating: str, note: str =
     return {"digest_id": digest_id, "point": point, "rating": rating}
 
 
+# Shaping themes (slice 4). Idea Machine applies these as they arrive, so the answer reads back the result; an edit
+# it records but doesn't make (a name another theme has) comes back as an error to tell the owner.
+
+def _theme_result(conn, theme_id: str) -> dict | None:
+    row = conn.execute("SELECT theme_id, name, pinned, n_ideas FROM pub.themes WHERE theme_id = %s", (theme_id,)).fetchone()
+    return {"id": str(row[0]), "name": row[1], "pinned": row[2], "ideas": row[3]} if row else None
+
+
+def _theme_event(conn, event: dict) -> None:
+    try:
+        data.record(conn, event, source="mcp")
+    except data.NotYet:
+        raise ToolError("Idea Machine doesn't take this theme edit yet; nothing changed") from None
+
+
+def rename_theme(conn, theme: str, name: str) -> dict:
+    tid, old, _ = _theme(conn, theme)
+    _theme_event(conn, {"kind": "rename_theme", "theme_id": tid, "name": name})
+    now = _theme_result(conn, tid)
+    if now and now["name"] == old and old.strip().lower() != str(name).strip().lower():
+        raise ToolError(f"not renamed: another theme is probably called {str(name).strip()!r}")
+    return {"renamed": old, "theme": now}
+
+
+def merge_themes(conn, theme: str, into: str) -> dict:
+    tid, name, _ = _theme(conn, theme)
+    into_id, into_name, _ = _theme(conn, into)
+    if tid == into_id:
+        raise ToolError("that's the same theme")
+    _theme_event(conn, {"kind": "merge_theme", "theme_id": tid, "into": into_id})
+    return {"merged": name, "into": _theme_result(conn, into_id)}
+
+
+def split_theme(conn, theme: str, name: str, idea_ids: list) -> dict:
+    tid, source, _ = _theme(conn, theme)
+    new = str(uuid.uuid4())
+    _theme_event(conn, {"kind": "split_theme", "theme_id": tid, "name": name,
+                        "idea_ids": [_uuid(i) for i in idea_ids or []], "new_theme_id": new})
+    made = _theme_result(conn, new)
+    if made is None:
+        raise ToolError(f"not split: another theme is probably called {str(name).strip()!r}")
+    return {"split_from": _theme_result(conn, tid) or source, "new_theme": made}
+
+
+def file_idea(conn, idea_id: str, theme: str, remove: bool = False) -> dict:
+    tid, name, _ = _theme(conn, theme)
+    i = _uuid(idea_id)
+    _theme_event(conn, {"kind": "unfile_idea" if remove else "file_idea", "idea_id": i, "theme_id": tid})
+    row = conn.execute("SELECT title, themes FROM pub.ideas WHERE idea_id = %s", (i,)).fetchone()
+    if row is None:
+        raise ToolError("no such idea (it may have been forgotten)")
+    return {"idea": row[0], "themes": list(row[1]), ("removed_from" if remove else "filed_into"): name}
+
+
 def add_idea(conn, title: str, statement: str, note: str = "", link_to: list | None = None) -> dict:
     links = [_uuid(i, "link_to") for i in (link_to or [])]
     new = str(uuid.uuid4())
@@ -411,6 +477,7 @@ def note_idea(conn, idea_id: str, note: str) -> dict:
 
 
 ID = {"type": "string", "description": "An idea's id, from search_ideas, open_theme, whats_new or get_idea"}
+THEME = {"type": "string", "description": "A theme's name (or a distinctive part of it) or id, from list_themes"}
 TOOLS = {
     "search_ideas": (search_ideas, True, "Find ideas in the owner's Idea Machine (their lattice) whose title, "
                      "statement, notes or themes contain every word of the query.",
@@ -456,6 +523,21 @@ TOOLS = {
                         "digest_week": {"type": "string", "description": "An ISO date in the digest's week; default "
                                                                          "the latest"},
                         "idea_ids": {"type": "array", "items": ID, "maxItems": MAX_DRAFT_IDEAS}}, []),
+    "rename_theme": (rename_theme, False, "Rename one of the owner's themes. Only once they've agreed to the name.",
+                     {"theme": THEME, "name": {"type": "string", "maxLength": 80}}, ["theme", "name"]),
+    "merge_themes": (merge_themes, False, "Merge a theme into another: its ideas join `into`, and it goes away. "
+                     "`into` keeps its name. Only once the owner has agreed; it can't be undone with one call.",
+                     {"theme": THEME, "into": THEME}, ["theme", "into"]),
+    "split_theme": (split_theme, False, "Split some ideas out of a theme into a new theme of the owner's (pinned; "
+                    "Idea Machine writes its description on its next run). open_theme first for the idea ids. Only "
+                    "once the owner has agreed to the name and the ideas.",
+                    {"theme": THEME, "name": {"type": "string", "maxLength": 80},
+                     "idea_ids": {"type": "array", "items": ID, "minItems": 1, "maxItems": 500}},
+                    ["theme", "name", "idea_ids"]),
+    "file_idea": (file_idea, False, "Put one idea into a theme, or take it out (remove=true). Idea Machine won't "
+                  "undo it on its own. Only when the owner asks or agrees.",
+                  {"idea_id": ID, "theme": THEME, "remove": {"type": "boolean", "default": False}},
+                  ["idea_id", "theme"]),
     "add_idea": (add_idea, False, "Add the owner's own idea to the lattice, worded as they approved: a short title, "
                  "a one-to-three-sentence statement, optional context, and optional ideas it connects to. Only after "
                  "they approve the wording; search_ideas first for one it may repeat.",

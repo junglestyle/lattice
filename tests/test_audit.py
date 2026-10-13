@@ -233,3 +233,34 @@ def test_shaping_themes_is_checked(url, admin):
     finally:
         admin.execute("DELETE FROM pub.feedback_events WHERE event_id > %s AND source = 'lattice' AND kind IN "
                       "('rename_theme', 'merge_theme', 'split_theme', 'file_idea')", (before,))
+
+
+@needs_db
+def test_shaping_themes_by_conversation():
+    """Against Idea Machine's triggers, in one transaction rolled back: the edits are real while it lasts."""
+    import psycopg
+
+    from lattice import mcp
+
+    conn = psycopg.connect(os.environ["LATTICE_DATABASE_URL"])   # not autocommit
+    try:
+        themes = conn.execute("SELECT name FROM pub.themes ORDER BY n_ideas DESC LIMIT 2").fetchall()
+        (big,), (other,) = themes
+        renamed = mcp.rename_theme(conn, big.upper(), "A rolled-back name")
+        assert renamed["renamed"] == big and renamed["theme"]["name"] == "A rolled-back name"
+        with pytest.raises(mcp.ToolError):   # a name another theme has isn't taken
+            mcp.rename_theme(conn, "A rolled-back name", other)
+        ideas = [i["id"] for i in mcp.open_theme(conn, "A rolled-back name")["ideas"][:2]]
+        split = mcp.split_theme(conn, "A rolled-back name", "Split, rolled back", ideas)
+        assert split["new_theme"]["name"] == "Split, rolled back" and split["new_theme"]["ideas"] == 2
+        out = mcp.file_idea(conn, ideas[0], "Split, rolled back", remove=True)
+        assert "Split, rolled back" not in out["themes"]
+        assert "Split, rolled back" in mcp.file_idea(conn, ideas[0], "Split, rolled back")["themes"]
+        merged = mcp.merge_themes(conn, "Split, rolled back", "A rolled-back name")
+        assert merged["into"]["name"] == "A rolled-back name"
+        assert not conn.execute("SELECT 1 FROM pub.themes WHERE name = 'Split, rolled back'").fetchone()
+        with pytest.raises(mcp.ToolError):
+            mcp.merge_themes(conn, other, other)
+    finally:
+        conn.rollback()
+        conn.close()
