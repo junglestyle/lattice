@@ -267,6 +267,39 @@ def test_shaping_themes_by_conversation():
 
 
 @needs_db
+def test_lattice_embeds_as_idea_machine_does(admin):
+    """Search by meaning compares Lattice's query vectors with Idea Machine's idea vectors: they must be the same."""
+    import numpy as np
+
+    from lattice import meaning
+
+    rows = admin.execute("""SELECT t.title, t.statement, e.embedding::text FROM im.idea_text t
+                            JOIN im.idea_embeddings e USING (idea_id) WHERE e.model_version = %s LIMIT 5""",
+                         (meaning.MODEL_VERSION,)).fetchall()
+    if not rows:
+        pytest.skip("Idea Machine's ideas aren't embedded with the model Lattice knows")
+    for title, statement, stored in rows:
+        v = np.array(meaning.embed(f"{title}\n{statement}"))
+        assert float(v @ np.array(json.loads(stored))) > 0.9999
+
+
+@needs_db
+def test_ideas_like_this(url):
+    near = json.loads(request(url + "/api/near?q=leading+a+partner+in+dance", login(url))[2])
+    assert set(near) >= {"available", "ideas"}
+    snap = json.loads(request(url + "/api/snapshot", login(url))[2])
+    assert isinstance(snap["neighbours"], dict)
+    assert tool(url, "similar_ideas")["isError"] and tool(url, "similar_ideas", idea_id="x", text="y")["isError"]
+    found = tool(url, "similar_ideas", text="leading a partner in dance")
+    assert bool(found.get("isError")) != near["available"]
+    if near["available"]:
+        ideas = found["structuredContent"]["ideas"]
+        assert ideas and ideas == sorted(ideas, key=lambda i: -i["similarity"])
+        like = tool(url, "similar_ideas", idea_id=ideas[0]["id"])["structuredContent"]["ideas"]
+        assert like and ideas[0]["id"] not in [i["id"] for i in like]
+
+
+@needs_db
 def test_markdown_export(url):
     import io
     import re

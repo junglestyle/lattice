@@ -8,6 +8,8 @@ from uuid import UUID
 
 import psycopg
 
+from lattice import meaning
+
 
 def connect() -> psycopg.Connection:
     try:
@@ -204,7 +206,8 @@ def snapshot(conn) -> dict:
     """Everything the app shows, in one piece. The device replaces its copy with this on every sync, so what Idea
     Machine forgets is gone from the phone too."""
     return {"graph": graph(conn), "ideas": details(conn), "review": review(conn, limit=500), "status": status(conn),
-            "pairs": compare_pairs(conn), "compared": compared(conn), "digests": digests(conn)}
+            "pairs": compare_pairs(conn), "compared": compared(conn), "digests": digests(conn),
+            "neighbours": meaning.neighbours(conn)}
 
 
 def digests(conn, week: str | None = None) -> list[dict]:

@@ -13,7 +13,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
-from lattice import auth, data, export, mcp, oauth
+from lattice import auth, data, export, mcp, meaning, oauth
 
 HERE = resources.files("lattice")
 STATIC = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
@@ -160,6 +160,13 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/export":   # the whole lattice as Markdown, mine to keep
                     self._send(200, export.build(conn), "application/zip",
                                {"Content-Disposition": f'attachment; filename="lattice-{datetime.date.today()}.zip"'})
+                elif path == "/api/near":   # search by meaning; the app falls back to words without it
+                    q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    try:
+                        hits = meaning.near(conn, q.get("q", [""])[0][:1000], int(q.get("k", ["15"])[0]))
+                        self._json({"available": True, "ideas": [{"id": i, "similarity": round(s, 3)} for i, s in hits]})
+                    except meaning.Unavailable as e:
+                        self._json({"available": False, "why": str(e), "ideas": []})
                 elif path.startswith("/api/idea/"):
                     found = data.idea(conn, path.removeprefix("/api/idea/"))
                     self._json(found or {"error": "no such idea"}, 200 if found else 404)

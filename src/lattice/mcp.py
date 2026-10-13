@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from lattice import data
+from lattice import data, meaning
 
 PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"]   # newest first; the first is offered when the client's isn't
 SERVER = {"name": "lattice", "title": "Lattice (Idea Machine)", "version": "0.1.0"}
@@ -32,8 +32,8 @@ through look_again once their idea turns out to matter; offer them after the spo
 verdict with decide_item. Discards are the owner's high-signal verdict: when they discard, ask why in a few words
 and pass it as the note.
 
-When the owner wants to add an idea from your conversation: search_ideas first, and if an existing idea says the
-same, offer a note or a link instead. Otherwise draft a short title and a one-to-three-sentence statement in the
+When the owner wants to add an idea from your conversation: check similar_ideas with your draft (and search_ideas
+for key words), and if an existing idea says the same, offer a note or a link instead. Otherwise draft a short title and a one-to-three-sentence statement in the
 owner's own terms, read them back, and call add_idea only once they approve the wording.
 
 Themes are the owner's to shape. You may suggest renaming, merging or splitting themes, or filing an idea
@@ -399,6 +399,34 @@ def file_idea(conn, idea_id: str, theme: str, remove: bool = False) -> dict:
     return {"idea": row[0], "themes": list(row[1]), ("removed_from" if remove else "filed_into"): name}
 
 
+def similar_ideas(conn, idea_id: str | None = None, text: str | None = None, limit: int = 8) -> dict:
+    if (idea_id is None) == (text is None):
+        raise ToolError("give idea_id (ideas like this one) or text (ideas close to these words), not both")
+    limit = max(1, min(int(limit), 30))
+    if idea_id is not None:
+        i = _uuid(idea_id)
+        hits = [(o, s) for o, s in meaning.neighbours(conn).get(i, [])][:limit]
+        if not hits:   # not published yet, or a new idea not embedded: embed its own text
+            row = conn.execute("SELECT title, statement FROM pub.ideas WHERE idea_id = %s", (i,)).fetchone()
+            if row is None:
+                raise ToolError("no such idea (it may have been forgotten)")
+            try:
+                hits = [(o, s) for o, s in meaning.near(conn, f"{row[0]}\n{row[1]}", limit + 1) if o != i][:limit]
+            except meaning.Unavailable as e:
+                raise ToolError(f"similar ideas aren't available: {e}") from None
+    else:
+        try:
+            hits = meaning.near(conn, text, limit)
+        except meaning.Unavailable as e:
+            raise ToolError(f"search by meaning isn't available: {e}; try search_ideas") from None
+    sim = dict(hits)
+    rows = conn.execute(f"SELECT {BRIEF} FROM pub.ideas WHERE idea_id = ANY(%s::uuid[])", (list(sim),)).fetchall()
+    ideas = sorted((_brief(r) | {"similarity": round(sim[str(r[0])], 2)} for r in rows), key=lambda x: -x["similarity"])
+    return {"ideas": ideas, "note": "Cosine similarity of Idea Machine's embeddings, best first. Between two ideas, "
+                                    "about 0.85 and up is close to the same idea and 0.7 related. A few words score "
+                                    "lower against a whole idea (0.6 to 0.75 for a good match), so judge by rank."}
+
+
 def add_idea(conn, title: str, statement: str, note: str = "", link_to: list | None = None) -> dict:
     links = [_uuid(i, "link_to") for i in (link_to or [])]
     new = str(uuid.uuid4())
@@ -538,9 +566,14 @@ TOOLS = {
                   "undo it on its own. Only when the owner asks or agrees.",
                   {"idea_id": ID, "theme": THEME, "remove": {"type": "boolean", "default": False}},
                   ["idea_id", "theme"]),
+    "similar_ideas": (similar_ideas, True, "Ideas close in meaning: like one idea (idea_id), or like some words "
+                      "(text), e.g. to check whether the owner has had a thought before, or to find what an idea "
+                      "connects to beyond its links.",
+                      {"idea_id": ID, "text": {"type": "string", "maxLength": 1000},
+                       "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 8}}, []),
     "add_idea": (add_idea, False, "Add the owner's own idea to the lattice, worded as they approved: a short title, "
                  "a one-to-three-sentence statement, optional context, and optional ideas it connects to. Only after "
-                 "they approve the wording; search_ideas first for one it may repeat.",
+                 "they approve the wording; similar_ideas first for one it may repeat.",
                  {"title": {"type": "string", "maxLength": 120}, "statement": {"type": "string", "maxLength": 1000},
                   "note": {"type": "string", "maxLength": 1000,
                            "description": "Context: where it came from, why it matters"},

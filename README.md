@@ -33,6 +33,10 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   arrive (its migration 024), and the app applies them to its copy at once.
 - **Time → Themes**: a theme stream, each theme a band over the days or weeks, as thick as how often its ideas came
   up (a capture shared among its idea's themes). Follows the View; tap a band or its key to open the theme.
+- **Ideas like this**: an idea's panel lists similar ideas (Idea Machine's nearest neighbours, `pub.idea_neighbours`,
+  kept on the device) with a one-tap Link; **≈ Meaning** makes the search box search by meaning. The server embeds
+  the words with the same model Idea Machine uses (`fastembed`, BAAI/bge-small-en-v1.5, baked into the image) and
+  asks `pub.ideas_near`; offline, or if Idea Machine's model changes, it matches words instead.
 - **Export as Markdown** (in the run-status panel): the whole lattice as a zip that opens as an Obsidian vault: a
   file per idea (properties, statement, notes, [[links]] to its connections, quotes), per theme and per digest, and
   an index. It's your own copy, so speakers keep their names.
@@ -63,7 +67,7 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
   `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, `compare_pair`, `review_digest`, and, when you
   ask, `star_idea`, `link_ideas`, `note_idea`, `record_comparison`, `decide_item` (your verdict on a spot check) and
-  `keep_rest` (the rest, in bulk), `add_idea` (worded with you, after a search for repeats), `rename_theme` / `merge_themes` / `split_theme` /
+  `keep_rest` (the rest, in bulk), `similar_ideas` (like an idea, or like some words), `add_idea` (worded with you, after a check for repeats), `rename_theme` / `merge_themes` / `split_theme` /
   `file_idea` (Claude may suggest a reorganisation; it changes themes only once you agree), `draft_material` (a theme, digest point or set of ideas
   with notes, quotes, connections and a reading order, for Claude to draft from), `weekly_digest` / `rate_digest_point`, plus `look_again` (kept unread, now mattering; `whats_new` counts them). "Let's
   catch up on review" works by voice.

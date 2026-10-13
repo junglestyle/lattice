@@ -3,7 +3,10 @@ name = "lattice"
 version = "0.1.0"
 description = "Lattice: navigate the idea lattice that Idea Machine publishes in schema pub."
 requires-python = ">=3.13"
-dependencies = ["psycopg[binary]>=3.2"]
+dependencies = [
+    "fastembed>=0.7",
+    "psycopg[binary]>=3.2",
+]
 
 [project.scripts]
 lattice = "lattice.server:main"

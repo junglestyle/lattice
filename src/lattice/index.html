@@ -181,7 +181,9 @@
           width: min(420px, calc(100vw - 24px)); max-height: 60vh; overflow: auto; background: var(--surface-1);
           border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; box-shadow: 0 6px 24px #0003; }
   #runs.open { display: block; }
-  body[data-view="review"] #viewbtn { display: none; }
+  body[data-view="review"] #viewbtn, body[data-view="review"] #meaningbtn { display: none; }
+  #meaningbtn[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
+  .similar .sim { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   #viewbtn[data-active="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   #viewpop { display: none; position: fixed; right: 12px; top: calc(52px + env(safe-area-inset-top)); z-index: 6;
              width: min(340px, calc(100vw - 24px)); background: var(--surface-1); border: 1px solid var(--border);
@@ -288,6 +290,7 @@
   </nav>
   <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas"
          style="display:none">
+  <button id="meaningbtn" aria-pressed="false" title="Search by meaning, not just words">≈ Meaning</button>
   <button id="addbtn" aria-haspopup="dialog">+ Idea</button>
   <button id="viewbtn" aria-haspopup="true" aria-expanded="false">View</button>
   <button class="status" id="status" aria-haspopup="true" aria-expanded="false"></button>
@@ -937,7 +940,30 @@ document.addEventListener("keydown", e => {   // on a keyboard: k keep, * star, 
 // --- Map and list ------------------------------------------------------------------------------------------
 
 const query = () => document.getElementById("search").value.trim().toLowerCase();
-const hit = n => inView(n) && (!onlyNew || isNew(n)) && (!query() || (n.title + " " + n.statement).toLowerCase().includes(query()));
+const hit = n => inView(n) && (!onlyNew || isNew(n)) && (!query() || (meaningHits ? meaningHits.has(n.id)
+  : (n.title + " " + n.statement).toLowerCase().includes(query())));
+
+// Search by meaning: the server embeds the words as Idea Machine embeds ideas and returns the closest (/api/near).
+// Online only; without it (offline, or Idea Machine not publishing it yet) the search matches words as before.
+let byMeaning = store.get("meaning") === "1", meaningHits = null, meaningSeq = 0;
+async function searchByMeaning() {
+  const q = query(), seq = ++meaningSeq;
+  if (!byMeaning || !q) { meaningHits = null; filter(); return; }
+  const r = await fetch(`/api/near?k=15&q=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  if (seq !== meaningSeq) return;   // a newer search is under way
+  // Ranked, not cut at a fixed score: a few words score lower against a whole idea than ideas do against each
+  // other. Keep what's near the best match.
+  const best = r?.ideas?.[0]?.similarity ?? 0;
+  meaningHits = r?.available ? new Map(r.ideas.filter(x => x.similarity >= best - 0.12).map(x => [x.id, x.similarity])) : null;
+  document.getElementById("meaningbtn").title = r?.available ? "Search by meaning, not just words"
+    : `Matching words: ${r?.why || "search by meaning needs a connection"}`;
+  filter();
+}
+function renderMeaningBtn() { document.getElementById("meaningbtn").setAttribute("aria-pressed", byMeaning); }
+document.getElementById("meaningbtn").addEventListener("click", () => {
+  byMeaning = !byMeaning; store.set("meaning", byMeaning ? "1" : "0"); renderMeaningBtn(); searchByMeaning();
+});
+renderMeaningBtn();
 
 // --- What to show: a time range and starred only, for the map, Time and List; titles on the map -------------
 // An idea is in a time range when it was said in it (any capture) or, for one I added, made in it. Archive ideas
@@ -1000,8 +1026,9 @@ function renderList() {
   const rows = state.graph.nodes.filter(hit);
   const best = order() === "best";
   const recent = (a, b) => (b.last_said || "").localeCompare(a.last_said || "");
-  rows.sort(best ? (a, b) => (b.score ?? -1) - (a.score ?? -1) || recent(a, b)
-                 : (a, b) => isNew(b) - isNew(a) || recent(a, b));
+  rows.sort(meaningHits && query() ? (a, b) => meaningHits.get(b.id) - meaningHits.get(a.id)   // closest first
+            : best ? (a, b) => (b.score ?? -1) - (a.score ?? -1) || recent(a, b)
+            : (a, b) => isNew(b) - isNew(a) || recent(a, b));
   list.innerHTML = (scored() ? `<p class="chips" role="group" aria-label="Order">` +
       `<button data-order="best" aria-pressed="${best}">Best first</button>` +
       `<button data-order="recent" aria-pressed="${!best}">Most recent</button></p>` : "") +
@@ -1064,7 +1091,10 @@ function stepTheme(by) {   // All sits before the first theme and after the last
 // On a phone the strip would sit under the sheet, so the sheet's title bar steps instead.
 document.getElementById("sheetprev").addEventListener("click", () => stepTheme(-1));
 document.getElementById("sheetnext").addEventListener("click", () => stepTheme(1));
-document.getElementById("search").addEventListener("input", filter);
+document.getElementById("search").addEventListener("input", () => {
+  if (!byMeaning) { filter(); return; }
+  clearTimeout(searchByMeaning.t); searchByMeaning.t = setTimeout(searchByMeaning, 350);
+});
 
 // --- Time ------------------------------------------------------------------------------------------------
 // What keeps coming back: one row per idea that has captures, a dot for each time it came up (colored by theme),
@@ -1728,6 +1758,12 @@ function show(ideaId, viaTheme) {
         <button class="linkbtn" data-go="${c.other}">${esc(title(c.other))}</button>
         <span class="k">${kinds[c.kind] || esc(c.kind)}</span>
         ${c.kind === "mine" ? `<button class="linkbtn" data-unlink="${c.other}">Unlink</button>` : ""}</div>`).join("")}</div>` : "") +
+    (() => {   // close in meaning, beyond the links it already has
+      const near = (state.neighbours?.[ideaId] || []).filter(([o]) => state.ideas[o] && !conns.some(c => c.other === o)).slice(0, 5);
+      return near.length ? `<div class="ev similar"><b>Similar ideas</b>${near.map(([o, s]) => `<div class="conn">
+        <button class="linkbtn" data-go="${o}">${esc(title(o))}</button> <span class="sim">${Math.round(s * 100)}%</span>
+        <button class="linkbtn" data-linkto="${o}">Link</button></div>`).join("")}</div>` : "";
+    })() +
     d.evidence.map(ev => `<div class="ev"><q>${esc(ev.quote)}</q>` +
       `<div class="by">${esc(ev.said_by)} · ${day(ev.said_at)} · ${esc(ev.kind)}` +
       `${ev.verdict ? ` · ${verdictWord[ev.verdict] || ev.verdict}${unread(ev) ? " unread" : ""}` : ""}</div>` +
@@ -1759,6 +1795,10 @@ function show(ideaId, viaTheme) {
       refile({kind: "file_idea", idea_id: ideaId, theme_id: b.dataset.file})));
   });
   panel.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go)));
+  panel.querySelectorAll("[data-linkto]").forEach(b => b.addEventListener("click", async () => {
+    await act({kind: "link", idea_id: ideaId, other_idea_id: b.dataset.linkto});
+    saved(); redrawMap(); renderCounts(); show(ideaId, viaTheme);
+  }));
   panel.querySelectorAll("[data-unlink]").forEach(b => b.addEventListener("click", async () => {
     await act({kind: "unlink", idea_id: ideaId, other_idea_id: b.dataset.unlink});
     saved(); redrawMap(); renderCounts(); show(ideaId);
