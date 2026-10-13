@@ -206,6 +206,20 @@
   #themestrip button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   #themestrip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
   #graph { position: relative; }
+  .gridview { padding: 12px 12px 80px; overflow: auto; height: 100%; box-sizing: border-box; }
+  .gridview .intro { color: var(--text-secondary); font-size: 13px; margin: 0 0 10px; max-width: 640px; }
+  .gridview h3 { font-size: 14px; margin: 18px 0 6px; }
+  svg.grid { display: block; overflow: visible; }
+  svg.grid text { font-size: 12px; fill: var(--text-primary); }
+  svg.grid .gself { cursor: pointer; }
+  svg.grid .gcell { fill: none; stroke: var(--border); stroke-width: 0.5; }
+  svg.grid circle[data-pair] { fill: var(--text-secondary); cursor: pointer; }
+  svg.grid circle[data-pair]:hover { fill: var(--text-primary); }
+  .gpair { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 8px; width: 100%; max-width: 640px;
+           text-align: left; padding: 7px 10px; margin: 0 0 6px; border-radius: 8px; font-size: 13px; overflow: hidden; }
+  .gpair .gbar { position: absolute; inset: 0 auto 0 0; background: var(--surface-3); opacity: 0.6; z-index: 0; }
+  .gpair span:not(.gbar) { position: relative; }
+  .gpair .n { color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
   #runs .run { border-top: 1px solid var(--border); padding: 6px 0; font-size: 13px; }
   #runs .run:first-of-type { border-top: 0; }
   #runs .msg { color: var(--text-secondary); white-space: pre-wrap; }
@@ -296,7 +310,7 @@
   <button class="status" id="status" aria-haspopup="true" aria-expanded="false"></button>
   <span class="sync" id="sync" role="status"></span>
   <span class="seg map-only" role="group" aria-label="Map style"><button data-mode="graph">Graph</button><button
-    data-mode="territories">Territories</button></span>
+    data-mode="territories">Territories</button><button data-mode="grid">Grid</button></span>
   <span class="counts map-only" id="counts"></span>
   <button class="newbtn" id="newbtn" aria-pressed="false" hidden></button>
   <button class="newbtn map-only" id="bridgebtn" aria-pressed="false"
@@ -1055,6 +1069,7 @@ function filter() {
   if (mapNodes) mapNodes.attr("opacity", n => lit(n) ? 1 : 0.15);
   if (mapLabels) mapLabels.attr("opacity", n => lit(n) ? 1 : 0.2);
   if (mapEdges) mapEdges.attr("stroke-opacity", l => !b || crossLink(l) ? 1 : 0.1);
+  if (mapMode === "grid" && drawn && document.body.dataset.view === "map") drawGrid();   // search and View
   renderStrip();
   renderList();
   renderTimeline();
@@ -1063,7 +1078,7 @@ function filter() {
 // Theme by theme: a strip over the map to step through the themes (‹ ›) or jump to one; All shows the whole map.
 function renderStrip() {
   const box = document.getElementById("graph");
-  if (!mapNodes || !box.querySelector("svg")) return;
+  if (mapMode === "grid" || !mapNodes || !box.querySelector("svg")) return;
   let strip = document.getElementById("themestrip");
   if (!strip) { strip = document.createElement("div"); strip.id = "themestrip"; box.append(strip); }
   const themes = state.graph.themes.filter(t => !t.rejected);
@@ -1334,7 +1349,7 @@ const crossLink = l => {
   return a.length && b.length && !a.some(t => b.includes(t));
 };
 
-let mapMode = store.get("mapmode") === "territories" ? "territories" : "graph";
+let mapMode = ["territories", "grid"].includes(store.get("mapmode")) ? store.get("mapmode") : "graph";
 let mapNodes = null, drawn = false, shown = null, shownTheme = null, fromTheme = null;
 let mapZoom = null, mapSvg = null, mapBox = null, mapLabels = null, mapEdges = null;   // to zoom to a theme's ideas
 const placed = new Map();   // where each idea was last drawn, so a redraw doesn't scatter the map
@@ -1349,6 +1364,7 @@ function redrawMap() {
 function drawMap() {
   if (drawn || !state) return;
   drawn = true;
+  if (mapMode === "grid") { drawGrid(); return; }
   const {nodes, links, themes} = state.graph;
   const order = themes.map(t => t.name);
   const slot = themeSlot, color = themeColor;
@@ -1534,6 +1550,92 @@ document.getElementById("bridgebtn").addEventListener("click", e => {
   filter();
   if (!shown && !shownTheme) renderThemes();   // the Bridges section leads the panel while it's on
 });
+
+// --- Theme × theme --------------------------------------------------------------------------------------------
+// How my themes connect: for each pair, the ideas in both and the links between their ideas, as a triangle of dots
+// (bigger, more joined) and a ranked list. A link 'related' by Idea Machine counts half: it finds those for nearly
+// everything. Follows the View and the search. Tap a pair for the ideas and links that join it.
+
+function themePairs() {
+  const themes = state.graph.themes.filter(t => !t.rejected);
+  const lit = new Map(state.graph.nodes.filter(hit).map(n => [n.id, n]));
+  const key = (a, b) => [a, b].sort().join(" \u2194 ");   // goes in data-pair, so no characters HTML rewrites
+  const pairs = new Map();
+  const at = (a, b) => { const k = key(a, b); if (!pairs.has(k)) pairs.set(k, {a, b, shared: [], links: [], weight: 0}); return pairs.get(k); };
+  for (const n of lit.values()) {   // in two themes at once
+    const ts = n.themes.filter(t => themes.some(x => x.name === t));
+    ts.forEach((a, i) => ts.slice(i + 1).forEach(b => { const p = at(a, b); p.shared.push(n.id); p.weight += 1; }));
+  }
+  for (const l of state.graph.links) {   // a link from an idea in one theme to an idea in another
+    const s = lit.get(id(l.source)), t = lit.get(id(l.target));
+    if (!s || !t) continue;
+    const seen = new Set();
+    for (const a of s.themes) for (const b of t.themes) {
+      if (a === b || !themes.some(x => x.name === a) || !themes.some(x => x.name === b) || seen.has(key(a, b))) continue;
+      seen.add(key(a, b));
+      const p = at(a, b); p.links.push(l); p.weight += l.kind === "related" ? 0.5 : 1;
+    }
+  }
+  return {themes, pairs, key};
+}
+
+function drawGrid() {
+  const box = document.getElementById("graph");
+  mapNodes = mapLabels = mapEdges = mapZoom = null;   // nothing of the graph's left to dim or zoom
+  const {themes, pairs, key} = themePairs();
+  const total = name => [...pairs.values()].filter(p => p.a === name || p.b === name).reduce((s, p) => s + p.weight, 0);
+  const order = [...themes].sort((x, y) => total(y.name) - total(x.name));
+  const max = Math.max(1, ...[...pairs.values()].map(p => p.weight));
+  const phone = matchMedia("(max-width: 760px)").matches;
+  const n = order.length, W = Math.max(260, box.clientWidth - 24);
+  const label = phone ? Math.min(150, W * 0.42) : 260, cell = Math.max(18, Math.min(46, (W - label - 8) / Math.max(1, n)));
+  const short = s => { const room = Math.floor(label / 6.6); return s.length > room ? s.slice(0, room - 1) + "\u2026" : s; };
+  // Lower triangle with the diagonal: row i is a theme, and its column starts at its own (coloured) diagonal cell,
+  // so a column is read straight up to its theme's name.
+  let svg = `<svg class="grid" width="${label + cell * n + 8}" height="${cell * n + 8}" role="img" aria-label="How themes connect">`;
+  order.forEach((t, i) => {
+    svg += `<text x="${label - 8}" y="${i * cell + cell / 2 + 4}" text-anchor="end">${esc(short(t.name))}<title>${esc(t.name)}</title></text>`;
+    svg += `<circle class="gself" cx="${label + i * cell + cell / 2}" cy="${i * cell + cell / 2}" r="${Math.min(7, cell / 4)}"
+      style="fill:${themeSlot(t.name)}" data-theme="${t.id}"><title>${esc(t.name)}</title></circle>`;
+    for (let j = 0; j < i; j++) {
+      const p = pairs.get(key(t.name, order[j].name)), cx = label + j * cell + cell / 2, cy = i * cell + cell / 2;
+      svg += `<rect class="gcell" x="${label + j * cell}" y="${i * cell}" width="${cell}" height="${cell}"/>`;
+      if (p) svg += `<circle cx="${cx}" cy="${cy}" r="${Math.max(2.5, (cell / 2 - 3) * Math.sqrt(p.weight / max))}"
+        data-pair="${esc(key(t.name, order[j].name))}"><title>${esc(t.name)} \u2194 ${esc(order[j].name)}: ${p.shared.length} in both, ${p.links.length} link${p.links.length === 1 ? "" : "s"}</title></circle>`;
+    }
+  });
+  svg += `</svg>`;
+  const top = [...pairs.values()].sort((x, y) => y.weight - x.weight).slice(0, 12);
+  box.innerHTML = `<div class="gridview"><p class="intro">How your themes connect: a bigger dot, more ideas in both or
+      linked across. Each column belongs to the theme at its top, the coloured dot.</p>${svg}
+    <h3>Strongest connections</h3>${top.map(p => `<button class="gpair" data-pair="${esc(key(p.a, p.b))}">
+      <span class="gbar" style="width:${Math.round(100 * p.weight / max)}%"></span>
+      <span>${esc(p.a)} \u2194 ${esc(p.b)}</span><span class="n">${p.shared.length} in both \u00b7 ${p.links.length} links</span></button>`).join("")
+      || `<p class="intro">No two themes share or link ideas in this view.</p>`}</div>`;
+  box.querySelectorAll("[data-pair]").forEach(el => el.addEventListener("click", () => showPair(pairs.get(el.dataset.pair))));
+  box.querySelectorAll("svg.grid [data-theme]").forEach(el => el.addEventListener("click", () => showTheme(el.dataset.theme)));
+  document.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === mapMode));
+}
+
+function showPair(p) {
+  if (!p) return;
+  shown = shownTheme = null;
+  document.getElementById("sheettitle").textContent = `${p.a} \u2194 ${p.b}`;
+  if (sheetLevel() === "peek") sheet("half");
+  const t = i => esc(state.ideas[i]?.title ?? "(gone)");
+  const kinds = {evolves: "evolves", related: "related", archive: "archive link", mine: "your link"};
+  const body = document.getElementById("panelbody");
+  body.scrollTop = 0;
+  body.innerHTML = `<p><button id="back">\u2190 Themes</button></p><h2>${esc(p.a)} \u2194 ${esc(p.b)}</h2>` +
+    (p.shared.length ? `<div class="ev"><b>In both</b>${p.shared.map(i =>
+      `<div class="conn"><button class="linkbtn" data-go="${i}">${t(i)}</button></div>`).join("")}</div>` : "") +
+    (p.links.length ? `<div class="ev"><b>Linked across</b>${p.links.map(l =>
+      `<div class="conn"><button class="linkbtn" data-go="${id(l.source)}">${t(id(l.source))}</button>
+        <span class="k">\u2194 ${kinds[l.kind] || esc(l.kind)} \u2194</span>
+        <button class="linkbtn" data-go="${id(l.target)}">${t(id(l.target))}</button></div>`).join("")}</div>` : "");
+  body.querySelector("#back").addEventListener("click", renderThemes);
+  body.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go)));
+}
 
 document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => {
   mapMode = b.dataset.mode;

@@ -40,6 +40,9 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **Export as Markdown** (in the run-status panel): the whole lattice as a zip that opens as an Obsidian vault: a
   file per idea (properties, statement, notes, [[links]] to its connections, quotes), per theme and per digest, and
   an index. It's your own copy, so speakers keep their names.
+- **Map → Grid**: theme × theme, how your themes connect. Each pair's dot grows with the ideas in both and the
+  links across (a `related` link counts half), with the strongest pairs listed below; tap one for the ideas and links
+  that join them. Follows the View and the search.
 - **View**: a time range (all, 90, 30 or 7 days: by when an idea was said, or made if you added it) and starred only,
   for the map, Time and List; and idea titles on or off on the map. A strip over the map steps through the themes
   (on a phone, ‹ › in the sheet's title bar).
