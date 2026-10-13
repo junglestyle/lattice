@@ -5,7 +5,8 @@ the Lattice token as a bearer header and reachable only on the tailnet, like the
 
 What leaves through it follows Idea Machine's privacy policy B: quotes go out, but speakers are pseudonymized per
 answer ("me", "unknown", then S1, S2... in order of first appearance). Flags made here (star, link, note) are
-feedback events like the app's, with source 'mcp'.
+feedback events like the app's, with source 'mcp'; so are review verdicts (spot checks one at a time, the rest
+kept in bulk and flagged so).
 """
 
 import json
@@ -20,11 +21,15 @@ INSTRUCTIONS = """Lattice is the owner's idea lattice: ideas Idea Machine captur
 (and seeded from an old ChatGPT archive), grouped into themes, connected to each other, each backed by evidence
 quotes. Speak to the owner as "you". In quotes, "me" is the owner; S1, S2... are other people, renumbered in every
 answer. Search or open a theme before asking the owner for ids. Starring, linking and notes are the owner's
-feedback: do them when they ask, not on your own initiative."""
+feedback: do them when they ask, not on your own initiative.
+
+To review new captures, call review_digest: read the owner the spot checks one at a time and record their own
+verdict on each with decide_item (never your guess), then offer to keep the rest with keep_rest. The owner's
+default is to keep: the lattice gets its value from connections as it grows."""
 
 
-def _pseudonymize(rows: list[dict], key: str = "said_by") -> list[dict]:
-    alias: dict = {}
+def _pseudonymize(rows: list[dict], key: str = "said_by", alias: dict | None = None) -> list[dict]:
+    alias = {} if alias is None else alias   # shared across calls to keep one numbering in one answer
     for row in rows:
         who = row.get(key)
         if who not in ("me", "unknown", None):
@@ -37,6 +42,8 @@ def _uuid(value, name: str = "idea_id") -> str:
     try:
         return str(UUID(str(value)))
     except ValueError:
+        if name == "item_id":
+            raise ToolError("item_id must be a capture's id (a UUID) from review_digest") from None
         raise ToolError(f"{name} must be an idea id (a UUID) from search_ideas, open_theme or whats_new") from None
 
 
@@ -158,6 +165,56 @@ def whats_new(conn, since: str | None = None) -> dict:
             "captures_waiting_for_review": waiting}
 
 
+def review_digest(conn) -> dict:
+    queue = data.review(conn, limit=500)
+    picked = set(queue["audit"])
+    alias: dict = {}
+    spot = [i for i in queue["items"] if i["id"] in picked]
+    spot.sort(key=lambda i: i["confidence"])
+    checks = []
+    for n, i in enumerate(spot, 1):
+        _pseudonymize([i], alias=alias)
+        _pseudonymize(i["context"], key="speaker", alias=alias)
+        checks.append({"item_id": i["id"], "spot_check": f"{n} of {len(spot)}", "kind": i["kind"],
+                       "said_by": i["said_by"], "said_at": i["said_at"], "quote": i["quote"], "gist": i["gist"],
+                       "confidence": round(i["confidence"], 2), "themes": i["themes"],
+                       "idea": i["idea"]["title"] if i["idea"] else None,
+                       "conversation": [f"{c['speaker']}: {c['text']}" for c in i["context"]]})
+    rest = [i for i in queue["items"] if i["id"] not in picked]
+    kinds: dict = {}
+    for i in rest:
+        kinds[i["kind"]] = kinds.get(i["kind"], 0) + 1
+    return {"waiting": queue["total"], "spot_checks": checks,
+            "rest": {"count": len(rest), "by_kind": kinds,
+                     "items": [{"item_id": i["id"], "kind": i["kind"], "gist": i["gist"],
+                                "idea": i["idea"]["title"] if i["idea"] else None} for i in rest]},
+            "how": "Spot checks are spread across Idea Machine's confidence, lowest first. Read each to the owner "
+                   "and record what they say with decide_item. Then offer to keep the rest: if they want to judge "
+                   "some of them themselves, leave those out of keep_rest's item_ids."}
+
+
+VERDICTS = {"keep": "item_keep", "star": "item_star", "discard": "item_discard"}
+
+
+def decide_item(conn, item_id: str, verdict: str, note: str = "") -> dict:
+    if verdict not in VERDICTS:
+        raise ToolError("verdict must be keep, star or discard")
+    data.record(conn, {"kind": VERDICTS[verdict], "item_id": _uuid(item_id, "item_id"), "note": note}, source="mcp")
+    return {"item_id": item_id, "verdict": verdict}
+
+
+def keep_rest(conn, item_ids: list) -> dict:
+    if not isinstance(item_ids, list) or not item_ids:
+        raise ToolError("item_ids: the rest.items ids from review_digest the owner agreed to keep")
+    ids = {_uuid(i, "item_id") for i in item_ids}
+    queue = data.review(conn, limit=500)
+    waiting = {i["id"] for i in queue["items"]} - set(queue["audit"])   # a spot check is never kept in bulk
+    for i in sorted(ids & waiting):
+        data.record(conn, {"kind": "item_keep", "item_id": i, "bulk": True}, source="mcp")
+    return {"kept": len(ids & waiting), "skipped_not_waiting_or_spot_checks": sorted(ids - waiting),
+            "still_waiting": queue["total"] - len(ids & waiting)}
+
+
 def star_idea(conn, idea_id: str, starred: bool = True) -> dict:
     data.record(conn, {"kind": "star" if starred else "unstar", "idea_id": _uuid(idea_id)}, source="mcp")
     return {"idea_id": idea_id, "starred": bool(starred)}
@@ -218,6 +275,20 @@ TOOLS = {
     "whats_new": (whats_new, True, "Ideas added since a date (default: the last 7 days), proposed themes waiting "
                   "for a decision, and how many captures wait for review.",
                   {"since": {"type": "string", "description": "ISO date or time"}}, []),
+    "review_digest": (review_digest, True, "The captures waiting for review: a few spot checks, picked across "
+                      "Idea Machine's confidence for the owner to judge one by one, and the rest summarized for "
+                      "keeping in one go. Use when the owner wants to review or catch up.", {}, []),
+    "decide_item": (decide_item, False, "Record the owner's own verdict on one capture (a spot check, or any item "
+                    "they chose to judge). Never decide for them.",
+                    {"item_id": {"type": "string", "description": "A capture's item_id from review_digest"},
+                     "verdict": {"type": "string", "enum": ["keep", "star", "discard"]},
+                     "note": {"type": "string", "maxLength": 500, "description": "Why, if the owner said"}},
+                    ["item_id", "verdict"]),
+    "keep_rest": (keep_rest, False, "Keep, in one go, the non-spot-check captures from review_digest that the "
+                  "owner agreed to keep without reading. Only after they say so.",
+                  {"item_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 500,
+                                "description": "rest.items ids from review_digest, minus any the owner wants to judge"}},
+                  ["item_ids"]),
     "star_idea": (star_idea, False, "Star an idea (or unstar it with starred=false). Only when the owner asks.",
                   {"idea_id": ID, "starred": {"type": "boolean", "default": True}}, ["idea_id"]),
     "link_ideas": (link_ideas, False, "Link two ideas the owner sees as connected (or remove the link with "

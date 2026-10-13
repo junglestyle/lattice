@@ -137,6 +137,13 @@
           font-size: 16px; line-height: 1.4; }
   .pick b { display: block; margin-bottom: 4px; }
   .pick span { color: var(--text-secondary); font-size: 15px; }
+  .actions .row.two { grid-template-columns: 1fr 2fr; }
+  .batch h2 { font-size: 20px; margin: 10px 0 6px; }
+  .batch summary { cursor: pointer; color: var(--text-secondary); margin: 6px 0; }
+  .rest { list-style: none; padding: 0; margin: 0; }
+  .rest li { border-top: 1px solid var(--border); padding: 8px 0; }
+  .rest label { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.35; }
+  .rest input { margin-top: 3px; flex: none; }
   .done { max-width: 640px; margin: 48px auto; text-align: center; color: var(--text-secondary); }
   /* Run status: an icon in the status color, the words in text colors (never color alone). */
   .status { margin-left: auto; background: none; border: 0; padding: 2px 0; font-size: 13px;
@@ -333,6 +340,15 @@ async function act(event) {
   flush();
 }
 
+// Many at once (keeping the rest after an audit): one save, one flush.
+async function actAll(events) {
+  events.forEach(e => applyEvent(state, e));
+  pending.push(...events);
+  await idb.set("pending", pending);
+  renderSync();
+  flush();
+}
+
 let flushing = false;
 async function flush() {
   if (flushing) return;
@@ -459,12 +475,65 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
 // --- Review ------------------------------------------------------------------------------------------------
 
 const REASONS = ["no context", "not my interests", "garbled", "already have it", "too obvious"];
-let cardId;   // the capture on screen; a sync redraws the card only when it changes
+let cardId;   // the capture (or "batch:n") on screen; a sync redraws it only when it changes
+
+// Lower touch: Idea Machine's server picks a few spot checks across its confidence (state.review.audit), which I
+// judge one by one; the rest I can keep in one go, flagged as kept in bulk so Idea Machine can weigh them less.
+// Any I untick stay in the queue for me. My default is to keep: the value comes as the lattice grows.
+let oneByOne = false;   // this visit, I chose to go through them all
+const mine = new Set((() => { try { return JSON.parse(store.get("judge-myself")) || []; } catch { return []; } })());
+const spot = () => new Set(state.review.audit || []);
+const rest = () => state.review.items.filter(i => !spot().has(i.id));
+const bulkable = () => rest().filter(i => !mine.has(i.id));
+const showBatch = () => !oneByOne && !comparing && bulkable().length > 0;
+
+// Spot checks first, lowest confidence first; then the rest, most confident first.
+function queue() {
+  const at = new Map((state.review.audit || []).map((id, n) => [id, n]));
+  return [...state.review.items].sort((a, b) => (at.get(a.id) ?? Infinity) - (at.get(b.id) ?? Infinity));
+}
 
 function renderReview() {
   const {items, total} = state.review;
   document.getElementById("badge").textContent = total ? `· ${total}` : "";
-  if (items[0]?.id !== cardId || (!items.length && !comparing)) renderCard();
+  const key = showBatch() ? `batch:${rest().length}` : queue()[0]?.id;
+  if (key !== cardId || (!items.length && !comparing)) renderCard();
+}
+
+function renderBatch() {
+  const box = document.getElementById("review");
+  const items = rest(), checks = state.review.items.length - items.length;
+  cardId = `batch:${items.length}`;
+  const kinds = d3.rollups(items, v => v.length, i => i.kind).sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `${n} ${esc(k)}${n > 1 ? "s" : ""}`).join(", ");
+  box.innerHTML = `<article class="card batch">
+      <div class="meta"><span>${state.review.total} waiting</span></div>
+      <h2>Check ${checks || "none"}, keep the rest</h2>
+      <p class="gist">${checks ? `${checks} picked at random across Idea Machine's confidence, lowest to highest, for you
+        to judge one by one. ` : ""}The other ${items.length} can be kept in one go: ${kinds}.</p>
+      <details><summary>See the ${items.length}</summary>
+        <p class="muted">Untick any you'd rather judge yourself.</p>
+        <ul class="rest">${items.map(i => `<li><label><input type="checkbox" data-id="${esc(i.id)}"
+          ${mine.has(i.id) ? "" : "checked"}><span><span class="tag">${esc(i.kind)}</span> ${esc(i.gist)}</span></label></li>`).join("")}</ul>
+      </details>
+    </article>
+    <div class="actions"><div class="row two"><button id="b-one">One by one</button><button id="b-keep"></button></div></div>`;
+  const keepBtn = box.querySelector("#b-keep");
+  const label = () => { const n = bulkable().length; keepBtn.textContent = `Keep ${n}`; keepBtn.disabled = !n; };
+  label();
+  box.querySelectorAll(".rest input").forEach(c => c.addEventListener("change", () => {
+    c.checked ? mine.delete(c.dataset.id) : mine.add(c.dataset.id);
+    const live = new Set(state.review.items.map(i => i.id));
+    store.set("judge-myself", JSON.stringify([...mine].filter(id => live.has(id))));
+    label();
+  }));
+  box.querySelector("#b-one").addEventListener("click", () => { oneByOne = true; renderCard(); });
+  keepBtn.addEventListener("click", async () => {
+    const keep = bulkable();
+    await actAll(keep.map(i => ({kind: "item_keep", item_id: i.id, bulk: true})));
+    toast(`Kept ${keep.length}`);
+    renderCard();
+  });
 }
 
 // --- Which is better? ---------------------------------------------------------------------------------------
@@ -533,9 +602,12 @@ function renderCompare() {
 
 function renderCard() {
   const box = document.getElementById("review");
-  const item = state.review.items[0];
-  cardId = item?.id;
   document.getElementById("badge").textContent = state.review.total ? `· ${state.review.total}` : "";
+  if (showBatch()) { renderBatch(); return; }
+  const item = queue()[0];
+  cardId = item?.id;
+  const check = (state.review.audit || []).indexOf(item?.id);
+  const isCheck = check >= 0 && snap.review.total > snap.review.audit?.length;
   if (!item && comparing) { renderCompare(); return; }
   if (!item) {
     box.innerHTML = `<div class="done"><p>${state.review.total ? "That's all this device holds; more on the next sync."
@@ -546,7 +618,8 @@ function renderCard() {
     return;
   }
   box.innerHTML = `<article class="card">
-      <div class="meta"><span>${esc(item.kind)}</span><span>${esc(item.said_by)}</span>
+      <div class="meta">${isCheck ? `<span>spot check ${check + 1} of ${state.review.audit.length}</span>` : ""}
+        <span>${esc(item.kind)}</span><span>${esc(item.said_by)}</span>
         <span>${when(item.said_at)}</span><span>confidence ${Math.round(item.confidence * 100)}%</span></div>
       <p class="quote">“${esc(item.quote)}”</p>
       <p class="gist">${esc(item.gist)}</p>
@@ -627,7 +700,7 @@ function editor(host, idea, onSaved) {
 }
 
 async function decide(kind, note) {
-  const item = state.review.items[0];
+  const item = queue()[0];
   if (!item) return;
   await act({kind, item_id: item.id, note: note || undefined});
   toast({item_keep: "Kept", item_star: "Starred", item_discard: "Discarded"}[kind]);

@@ -1,5 +1,6 @@
 """Reads Idea Machine's published lattice (schema pub) as role lattice_app. Its one write: appending feedback events."""
 
+import hashlib
 import json
 import os
 import random
@@ -168,7 +169,21 @@ def review(conn, limit: int = 50) -> dict:
               "confidence": c, "said_at": at.isoformat(), "context": context.get(i, []),
               "idea": {"id": str(iid), "title": t, "statement": st, "note": note} if iid and t else None}
              for i, k, who, q, g, th, c, at, iid, t, st, note in rows]
-    return {"total": total, "items": items}
+    return {"total": total, "items": items, "audit": audit(items)}
+
+
+AUDIT = 5
+
+
+def audit(items: list[dict], n: int = AUDIT) -> list[str]:
+    """The captures I judge myself before keeping the rest in one go: one from each band of Idea Machine's
+    confidence, lowest first. Within a band the pick is by a hash of the id, so it looks random but every device
+    (and the MCP server) picks the same ones, and an item stays picked while the queue around it changes."""
+    if len(items) <= n:
+        return [i["id"] for i in sorted(items, key=lambda i: i["confidence"])]
+    ranked = sorted(items, key=lambda i: (i["confidence"], i["id"]))
+    bands = [ranked[len(ranked) * k // n:len(ranked) * (k + 1) // n] for k in range(n)]
+    return [min(b, key=lambda i: hashlib.sha256(i["id"].encode()).digest())["id"] for b in bands]
 
 
 # What Lattice may say, and about what (ROADMAP §3.5). Everything else is refused before it reaches the database.
@@ -193,6 +208,8 @@ def record(conn, event: dict, source: str = "lattice") -> int:
     payload = {}
     if kind.startswith("item_") and str(event.get("note") or "").strip():   # why I kept, starred or discarded it
         payload["note"] = str(event["note"]).strip()[:500]
+    if kind == "item_keep" and event.get("bulk") is True:   # kept with the rest after an audit, not read one by one
+        payload["bulk"] = True
     elif kind == "idea_correct":   # my wording; an empty field reverts to Claude's
         payload = {k: str(event[k]).strip()[:limit] for k, limit in (("title", 120), ("statement", 1000)) if k in event}
         if not payload:

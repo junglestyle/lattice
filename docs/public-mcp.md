@@ -16,8 +16,8 @@ never 0.0.0.0, never tailscale funnel") for this one endpoint.
    opens a sign-in page in your browser where you enter the **Lattice token**, and gets an access token (1 hour)
    and a refresh token (30 days, rotated on every use; a reused one revokes its family). PKCE (S256) is required.
    Codes go only to Claude's hosted callback (`https://claude.ai/api/mcp/auth_callback`, and `claude.com`).
-3. **Read-only or read and write.** The sign-in page has a checkbox for whether Claude may also star, link and set
-   notes. Without it the write tools don't exist for that connector.
+3. **Read-only or read and write.** The sign-in page has a checkbox for whether Claude may also record review verdicts,
+   star, link and set notes. Without it the write tools don't exist for that connector.
 4. **Anthropic's address range, checked twice.** Claude's servers make every request except the sign-in page, and
    they come from `160.79.104.0/21` ([Anthropic: IP addresses](https://platform.claude.com/docs/en/api/ip-addresses)).
    A Cloudflare WAF rule blocks anything else, and Lattice checks again from `CF-Connecting-IP`

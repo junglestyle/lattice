@@ -6,7 +6,10 @@ Its only write, from a later slice, will be appending to `pub.feedback_events`.
 
 What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 
-- **Review** one capture at a time, with keep / ★ / discard and one-tap reasons, on the phone. When the captures
+- **Review** with a light touch: five spot checks, picked across Idea Machine's confidence (one per band, by a hash
+  of the id, so every device and the MCP server agree), to judge one by one, and **Keep the rest** in one tap.
+  Those keeps carry `{"bulk": true}` so Idea Machine can weigh them below a verdict I read; anything I untick stays
+  in the queue. Or go **one by one**, with keep / ★ / discard and one-tap reasons. When the captures
   run out, **compare ideas** two at a time ("which is better?", `idea_compare` events): a steadier signal for Idea
   Machine's ranking than keep and discard. Idea Machine picks the pairs (`pub.compare_pairs`); without them,
   neighbouring scores or a shared theme. The order shown is random and recorded.
@@ -29,8 +32,9 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   from the phone too. Logging out (in the run-status panel) clears the copy and the queue.
 
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
-  `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, `compare_pair`, and, when you ask, `star_idea`, `link_ideas`, `note_idea`,
-  `record_comparison`.
+  `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, `compare_pair`, `review_digest`, and, when you
+  ask, `star_idea`, `link_ideas`, `note_idea`, `record_comparison`, `decide_item` (your verdict on a spot check) and
+  `keep_rest` (the rest, in bulk). "Let's catch up on review" works by voice.
   It takes the Lattice token as a bearer header and is tailnet-only like the rest. For claude.ai and the phone
   app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",
   "unknown", S1, S2...), as in Idea Machine's privacy policy B. From Claude Code on a tailnet machine:
