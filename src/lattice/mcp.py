@@ -10,6 +10,7 @@ kept in bulk and flagged so).
 """
 
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -28,7 +29,11 @@ verdict on each with decide_item (never your guess), then offer to keep the rest
 default is to keep: the lattice gets its value from connections as it grows. Captures kept that way come back
 through look_again once their idea turns out to matter; offer them after the spot checks, and record the owner's
 verdict with decide_item. Discards are the owner's high-signal verdict: when they discard, ask why in a few words
-and pass it as the note."""
+and pass it as the note.
+
+When the owner wants to add an idea from your conversation: search_ideas first, and if an existing idea says the
+same, offer a note or a link instead. Otherwise draft a short title and a one-to-three-sentence statement in the
+owner's own terms, read them back, and call add_idea only once they approve the wording."""
 
 
 def _pseudonymize(rows: list[dict], key: str = "said_by", alias: dict | None = None) -> list[dict]:
@@ -239,6 +244,18 @@ def rate_digest_point(conn, digest_id: int, point: int, rating: str, note: str =
     return {"digest_id": digest_id, "point": point, "rating": rating}
 
 
+def add_idea(conn, title: str, statement: str, note: str = "", link_to: list | None = None) -> dict:
+    links = [_uuid(i, "link_to") for i in (link_to or [])]
+    new = str(uuid.uuid4())
+    try:
+        data.record(conn, {"kind": "idea_add", "idea_id": new, "title": title, "statement": statement, "note": note,
+                           "link_to": links}, source="mcp")
+    except data.NotYet:
+        raise ToolError("Idea Machine doesn't accept new ideas yet; nothing was saved") from None
+    return {"idea_id": new, "title": str(title).strip()[:120], "linked_to": links,
+            "note": "Added. Idea Machine embeds, places and files it into themes on its next hourly run."}
+
+
 VERDICTS = {"keep": "item_keep", "star": "item_star", "discard": "item_discard"}
 
 
@@ -340,6 +357,13 @@ TOOLS = {
                            "rating": {"type": "string", "enum": ["star", "dismiss"]},
                            "note": {"type": "string", "maxLength": 500, "description": "Why, if the owner said"}},
                           ["digest_id", "point", "rating"]),
+    "add_idea": (add_idea, False, "Add the owner's own idea to the lattice, worded as they approved: a short title, "
+                 "a one-to-three-sentence statement, optional context, and optional ideas it connects to. Only after "
+                 "they approve the wording; search_ideas first for one it may repeat.",
+                 {"title": {"type": "string", "maxLength": 120}, "statement": {"type": "string", "maxLength": 1000},
+                  "note": {"type": "string", "maxLength": 1000,
+                           "description": "Context: where it came from, why it matters"},
+                  "link_to": {"type": "array", "items": ID, "maxItems": 10}}, ["title", "statement"]),
     "decide_item": (decide_item, False, "Record the owner's own verdict on one capture (a spot check, or any item "
                     "they chose to judge). Never decide for them.",
                     {"item_id": {"type": "string", "description": "A capture's item_id from review_digest"},

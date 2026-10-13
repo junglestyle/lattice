@@ -176,6 +176,11 @@
   .sync { font-size: 13px; color: var(--text-secondary); }
   .sync:empty { display: none; }
   body[data-view="review"] #newbtn { display: none; }
+  #adddlg { border: 1px solid var(--border); border-radius: 10px; padding: 0; width: min(520px, calc(100vw - 32px));
+            background: var(--surface-1); color: var(--text-primary); }
+  #adddlg::backdrop { background: #0006; }
+  #adddlg .editor { margin: 0; border: 0; }
+  #adddlg h2 { font-size: 16px; margin: 0 0 4px; }
   .newbtn[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   .tag { font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--text-secondary); }
   #panel .conn { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; }
@@ -243,6 +248,7 @@
   </nav>
   <input id="search" type="search" placeholder="Search ideas" aria-label="Search ideas"
          style="display:none">
+  <button id="addbtn" aria-haspopup="dialog">+ Idea</button>
   <button class="status" id="status" aria-haspopup="true" aria-expanded="false"></button>
   <span class="sync" id="sync" role="status"></span>
   <span class="seg map-only" role="group" aria-label="Map style"><button data-mode="graph">Graph</button><button
@@ -266,6 +272,14 @@
 <div class="tip" id="tip"></div>
 <div id="runs" role="dialog" aria-label="Recent runs"></div>
 <div class="toast" id="toast" role="status"></div>
+<dialog id="adddlg" aria-labelledby="addh"><form method="dialog" class="editor">
+  <h2 id="addh">New idea</h2>
+  <label>Title<input id="add-title" maxlength="120" required></label>
+  <label>What the idea is<textarea id="add-statement" rows="4" maxlength="1000" required></textarea></label>
+  <label>Context (optional): where it came from, why it matters<textarea id="add-note" rows="2"
+    maxlength="1000"></textarea></label>
+  <div class="edrow"><button value="save">Add</button><button value="cancel" formnovalidate>Cancel</button></div>
+</form></dialog>
 <script>
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
@@ -329,6 +343,16 @@ function applyEvent(st, e) {
   } else if (e.kind.endsWith("_theme")) {
     const t = st.graph.themes.find(t => t.id === e.theme_id);
     if (t) e.kind === "reject_theme" ? t.rejected = true : t.pinned = e.kind === "pin_theme";
+  } else if (e.kind === "idea_add") {   // until Idea Machine places and files it: no themes, no position
+    if (!idea) {
+      const base = {id: e.idea_id, title: e.title, statement: e.statement, origin: "mine", themes: [], starred: false,
+                    corrected: false, created_at: new Date().toISOString()};
+      st.graph.nodes.push({...base, evidence: 0, pos: null, score: null, first_said: null, last_said: null});
+      st.ideas[e.idea_id] = {...base, evidence: [], ref: null, notes: e.note || null, ranking: null, my_note: null,
+                             claude_title: e.title, claude_statement: e.statement};
+    }
+    for (const other of e.link_to || []) if (st.ideas[other] && !st.graph.links.some(l => l.kind === "mine" && samePair(l, e.idea_id, other)))
+      st.graph.links.push({source: e.idea_id, target: other, kind: "mine", weight: 1});
   } else if (e.kind === "digest_star" || e.kind === "digest_dismiss") {
     const p = (st.digests || []).find(d => d.id === e.digest_id)?.points.find(p => p.point === e.point);
     if (p) p.mine = e.kind.slice(7);
@@ -370,6 +394,7 @@ let flushing = false;
 async function flush() {
   if (flushing) return;
   flushing = true;
+  let added = false;   // a new idea went through: refresh the copy, so it holds the idea even offline later
   try {
     while (pending.length) {
       let r;
@@ -383,10 +408,11 @@ async function flush() {
         toast(`Not saved: ${(await r.json().catch(() => ({}))).error || r.statusText}`);
         pending.shift(); await idb.set("pending", pending); rebuild(); renderAll(); continue;
       }
+      added ||= pending[0].kind === "idea_add";
       pending.shift();
       await idb.set("pending", pending);
     }
-  } finally { flushing = false; renderSync(); }
+  } finally { flushing = false; renderSync(); if (added) setTimeout(sync, 0); }
 }
 
 let syncing = false;
@@ -859,7 +885,7 @@ function renderList() {
     rows.map(n =>
       `<tr class="row" data-id="${n.id}"><td class="c-title">${n.starred ? "★ " : ""}${esc(n.title)}${isNew(n) ? ' <span class="tag">new</span>' : ""}</td>` +
       (scored() ? `<td class="c-score">${score(n)}</td>` : "") +
-      `<td class="c-from">${n.origin === "archive" ? esc(n.ref) : "captured"}</td>` +
+      `<td class="c-from">${n.origin === "archive" ? esc(n.ref) : n.origin === "mine" ? "added" : "captured"}</td>` +
       `<td class="c-themes">${esc(n.themes.join(", "))}</td><td class="c-ev">${n.evidence || ""}</td>` +
       `<td class="c-when">${day(n.last_said)}</td></tr>`).join("") +
     `</tbody></table>`;
@@ -1330,7 +1356,7 @@ function showTheme(themeId) {
     `<p class="meta">${ideas.length} idea${ideas.length === 1 ? "" : "s"}${status ? ` · ${status}` : ""}</p>` +
     ideas.map(n => `<div class="ev"><button class="linkbtn idea-link" data-go="${n.id}">${n.starred ? "★ " : ""}${esc(n.title)}</button>` +
       `<div class="by">${n.score != null ? `score ${n.score.toFixed(2)} · ` : ""}${n.evidence ? `${n.evidence} evidence · ` : ""}` +
-      `${n.origin === "archive" ? "archive" : day(n.last_said)}${isNew(n) ? " \u00b7 new" : ""}` +
+      `${n.origin === "archive" ? "archive" : n.origin === "mine" ? "added by you" : day(n.last_said)}${isNew(n) ? " \u00b7 new" : ""}` +
       `${(() => { const o = bridges().get(n.id)?.spans.filter(x => x !== t.name) || [];
                   return o.length ? ` \u00b7 \u2194 ${o.map(esc).join(", ")}` : ""; })()}</div></div>`).join("");
   body.querySelector("#back").addEventListener("click", renderThemes);
@@ -1380,9 +1406,10 @@ function show(ideaId, viaTheme) {
     `<div id="paneledit"></div><div id="linker" hidden></div>` +
     `<h2>${esc(d.title)}</h2><p class="statement">${esc(d.statement)}</p>` +
     (d.my_note ? `<p class="notes">Your note: ${esc(d.my_note)}</p>` : "") +
-    (d.corrected ? `<p class="meta">${d.origin === "archive" ? "Originally" : "Claude heard"}: ` +
+    (d.corrected ? `<p class="meta">${{archive: "Originally", mine: "You first wrote"}[d.origin] || "Claude heard"}: ` +
       `<i>${esc(d.claude_title)}</i> — ${esc(d.claude_statement)}</p>` : "") +
-    `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : "Captured from conversation"}` +
+    `<p class="meta">${d.origin === "archive" ? `From the archive (${esc(d.ref)})` : d.origin === "mine" ? "Added by you"
+      : "Captured from conversation"}` +
     `${d.themes.length ? ` · ${esc(d.themes.join(", "))}` : ""}</p>` +
     (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
     (bridges().has(ideaId) ? `<p class="meta">Bridges ${bridges().get(ideaId).spans.map(esc).join(" \u2194 ")}</p>` : "") +
@@ -1446,6 +1473,28 @@ function linker(ideaId) {
   q.addEventListener("input", list);
   q.focus();
 }
+
+// --- Add an idea ----------------------------------------------------------------------------------------------
+// My own idea, straight into the lattice: an idea_add event with an id made here, so it shows at once (and can be
+// starred or linked) before Idea Machine embeds, places and files it on its next run.
+const addDlg = document.getElementById("adddlg");
+document.getElementById("addbtn").addEventListener("click", () => {
+  addDlg.querySelector("form").reset();
+  addDlg.showModal();
+  document.getElementById("add-title").focus();
+});
+addDlg.addEventListener("close", async () => {
+  if (addDlg.returnValue !== "save" || !state) return;
+  const title = document.getElementById("add-title").value.trim();
+  const statement = document.getElementById("add-statement").value.trim();
+  const note = document.getElementById("add-note").value.trim();
+  if (!title || !statement) return;
+  const ideaId = crypto.randomUUID();
+  await act({kind: "idea_add", idea_id: ideaId, title, statement, note: note || undefined});
+  toast("Added. Idea Machine places it on its next run");
+  renderCounts(); renderList(); redrawMap();
+  setTab("map"); show(ideaId);
+});
 
 function renderAll() {
   renderStatus();

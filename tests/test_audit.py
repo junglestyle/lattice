@@ -147,3 +147,35 @@ def test_the_weekly_digest(url, admin):
         assert tool(url, "weekly_digest")["structuredContent"]["points"][0]["owner_said"] == "star"   # latest wins
     finally:
         admin.execute("DELETE FROM pub.feedback_events WHERE event_id > %s AND kind LIKE 'digest_%%'", (before,))
+
+
+@needs_db
+def test_adding_an_idea(url, admin):
+    import uuid as _uuid
+
+    new = str(_uuid.uuid4())
+    for bad in [{"kind": "idea_add", "idea_id": new, "title": "No statement"},
+                {"kind": "idea_add", "idea_id": new, "title": " ", "statement": "x"},
+                {"kind": "idea_add", "idea_id": new, "title": "t", "statement": "s", "link_to": ["nope"]},
+                {"kind": "idea_add", "idea_id": new, "title": "t", "statement": "s", "link_to": "x"}]:
+        assert post(url + "/api/feedback", login(url), bad)[0] == 400, bad
+    (other,) = admin.execute("SELECT idea_id FROM pub.ideas LIMIT 1").fetchone()
+    good = {"kind": "idea_add", "idea_id": new, "title": " Mine ", "statement": "An idea I typed.",
+            "note": "From a walk.", "link_to": [str(other), new]}
+    status, body = post(url + "/api/feedback", login(url), good)
+    try:
+        assert status in (201, 503)   # 503 until Idea Machine takes idea_add
+        if status == 201:
+            assert admin.execute("SELECT payload FROM pub.feedback_events WHERE event_id = %s",
+                                 (body["event_id"],)).fetchone()[0] == {
+                "title": "Mine", "statement": "An idea I typed.", "note": "From a walk.", "link_to": [str(other)]}
+            shown = json.loads(request(url + f"/api/idea/{new}", login(url))[2])   # at once, not on the run
+            assert (shown["title"], shown["origin"], shown["notes"]) == ("Mine", "mine", "From a walk.")
+            assert post(url + "/api/feedback", login(url), good)[0] == 201   # a resend changes nothing
+        added = tool(url, "add_idea", title="T", statement="S")
+        assert bool(added.get("isError")) == (status == 503)
+        made = [new] + ([added["structuredContent"]["idea_id"]] if status == 201 else [])
+    finally:
+        made = locals().get("made", [new])
+        admin.execute("DELETE FROM pub.feedback_events WHERE idea_id = ANY(%s::uuid[])", (made,))
+        admin.execute("DELETE FROM im.ideas WHERE idea_id = ANY(%s::uuid[]) AND origin = 'mine'", (made,))

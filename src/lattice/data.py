@@ -262,7 +262,7 @@ def audit(items: list[dict], n: int = AUDIT) -> list[str]:
 EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_id",
           "star": "idea_id", "unstar": "idea_id", "idea_correct": "idea_id", "idea_note": "idea_id",
           "pin_theme": "theme_id", "unpin_theme": "theme_id", "reject_theme": "theme_id",
-          "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id",
+          "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id", "idea_add": "idea_id",
           "digest_star": None, "digest_dismiss": None}   # a digest point: payload digest_id and point
 WINNERS = ("first", "second", "tie")
 
@@ -293,6 +293,18 @@ def record(conn, event: dict, source: str = "lattice") -> int:
             raise ValueError("a correction needs a title or a statement")
     elif kind == "idea_note":   # context for the idea; empty clears it
         payload = {"note": str(event.get("note") or "").strip()[:1000]}
+    elif kind == "idea_add":   # my own idea; idea_id is new, made by the client so a resend is the same idea
+        payload = {k: str(event.get(k) or "").strip()[:limit] for k, limit in (("title", 120), ("statement", 1000))}
+        if not all(payload.values()):
+            raise ValueError("a new idea needs a title and a statement")
+        if str(event.get("note") or "").strip():
+            payload["note"] = str(event["note"]).strip()[:1000]
+        links = event.get("link_to") or []
+        if not isinstance(links, list) or len(links) > 10:
+            raise ValueError("link_to: up to 10 idea ids")
+        links = sorted({str(UUID(str(x))) for x in links} - {ref})
+        if links:
+            payload["link_to"] = links
     other = None
     if kind in ("link", "unlink", "idea_compare"):   # links are undirected; a comparison keeps the order shown
         other = str(UUID(str(event.get("other_idea_id", ""))))
