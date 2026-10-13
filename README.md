@@ -31,6 +31,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **Shape themes** (slice 4): in a theme, Rename, Merge into…, or Split… (tick ideas into a new theme of yours);
   in an idea's panel, take it out of a theme (×) or put it into another (+ Theme). Idea Machine applies them as they
   arrive (its migration 024), and the app applies them to its copy at once.
+- **Time → Themes**: a theme stream, each theme a band over the days or weeks, as thick as how often its ideas came
+  up (a capture shared among its idea's themes). Follows the View; tap a band or its key to open the theme.
 - **View**: a time range (all, 90, 30 or 7 days: by when an idea was said, or made if you added it) and starred only,
   for the map, Time and List; and idea titles on or off on the map. A strip over the map steps through the themes
   (on a phone, ‹ › in the sheet's title bar).
