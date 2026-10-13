@@ -320,3 +320,14 @@ def test_markdown_export(url):
             assert target in files, (n, target)
     one = z.read(next(n for n in names if n.startswith("Lattice/ideas/"))).decode()
     assert one.startswith("---\nid: ") and "\n# " in one
+
+
+@needs_db
+def test_demo_mode_marks_are_checked(url):
+    (idea,) = json.loads(request(url + "/api/snapshot", login(url))[2])["graph"]["nodes"][:1]
+    for bad in [{"kind": "idea_sensitive", "idea_id": idea["id"]},
+                {"kind": "idea_sensitive", "idea_id": idea["id"], "sensitive": "yes"},
+                {"kind": "theme_sensitive", "theme_id": "nope", "sensitive": True}]:
+        assert post(url + "/api/feedback", login(url), bad)[0] == 400, bad
+    snap = json.loads(request(url + "/api/snapshot", login(url))[2])
+    assert set(snap["sensitivity"]) == {"ideas", "themes"}

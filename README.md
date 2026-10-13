@@ -43,6 +43,10 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **Map → Grid**: theme × theme, how your themes connect. Each pair's dot grows with the ideas in both and the
   links across (a `related` link counts half), with the strongest pairs listed below; tap one for the ideas and links
   that join them. Follows the View and the search.
+- **Demo mode** (in View), for showing Lattice to someone: ideas and themes Idea Machine tagged (`pub.sensitivity`:
+  sex, gender and sexual politics, political extremism, violence, racism, and swearing) are taken out of every view,
+  by the categories you tick; digest points citing them and digest summaries go too. "Black out swearing" redacts
+  swear words wherever text is shown. In an idea's or theme's panel, Hide it / Show it overrides the tag.
 - **View**: a time range (all, 90, 30 or 7 days: by when an idea was said, or made if you added it) and starred only,
   for the map, Time and List; and idea titles on or off on the map. A strip over the map steps through the themes
   (on a phone, ‹ › in the sheet's title bar).

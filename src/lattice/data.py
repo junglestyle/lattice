@@ -207,7 +207,21 @@ def snapshot(conn) -> dict:
     Machine forgets is gone from the phone too."""
     return {"graph": graph(conn), "ideas": details(conn), "review": review(conn, limit=500), "status": status(conn),
             "pairs": compare_pairs(conn), "compared": compared(conn), "digests": digests(conn),
-            "neighbours": meaning.neighbours(conn)}
+            "neighbours": meaning.neighbours(conn), "sensitivity": sensitivity(conn)}
+
+
+def sensitivity(conn) -> dict:
+    """What demo mode hides (pub.sensitivity): ideas and themes Claude tagged or I marked, with categories and who
+    decided. {"ideas": {id: {...}}, "themes": {id: {...}}}; nothing tagged until Idea Machine publishes it."""
+    out: dict = {"ideas": {}, "themes": {}}
+    try:
+        for kind, i, sensitive, cats, by in conn.execute(
+                "SELECT kind, id, sensitive, categories, by FROM pub.sensitivity"):
+            out["ideas" if kind == "idea" else "themes"][str(i)] = {"sensitive": sensitive, "categories": list(cats or []),
+                                                                   "by": by}
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        pass
+    return out
 
 
 def digests(conn, week: str | None = None) -> list[dict]:
@@ -267,6 +281,7 @@ EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_
           "pin_theme": "theme_id", "unpin_theme": "theme_id", "reject_theme": "theme_id",
           "rename_theme": "theme_id", "merge_theme": "theme_id", "split_theme": "theme_id",
           "file_idea": "idea_id", "unfile_idea": "idea_id",
+          "idea_sensitive": "idea_id", "theme_sensitive": "theme_id",   # my call for demo mode
           "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id", "idea_add": "idea_id",
           "digest_star": None, "digest_dismiss": None}   # a digest point: payload digest_id and point
 WINNERS = ("first", "second", "tie")
@@ -310,6 +325,10 @@ def record(conn, event: dict, source: str = "lattice") -> int:
         links = sorted({str(UUID(str(x))) for x in links} - {ref})
         if links:
             payload["link_to"] = links
+    elif kind in ("idea_sensitive", "theme_sensitive"):
+        if not isinstance(event.get("sensitive"), bool):
+            raise ValueError("sensitive must be true or false")
+        payload = {"sensitive": event["sensitive"]}
     elif kind == "rename_theme":
         payload = {"name": str(event.get("name") or "").strip()[:80]}
         if not payload["name"]:

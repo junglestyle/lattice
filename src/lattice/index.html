@@ -192,6 +192,9 @@
   #viewpop .vh { margin: 0; font-size: 12px; color: var(--text-secondary); }
   #viewpop .muted { margin: 0; }
   #viewpop label { display: flex; gap: 8px; align-items: center; }
+  #demo-opts { display: grid; gap: 6px; padding-left: 24px; }
+  #demo-opts[hidden] { display: none; }
+  #demo-cats { display: grid; gap: 4px; }
   #rangeseg { display: flex; }
   #rangeseg button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   #graph.notitles text:not(.land) { display: none; }
@@ -336,6 +339,9 @@
     data-range="90">90 days</button><button data-range="30">30 days</button><button data-range="7">7 days</button></div>
   <label><input type="checkbox" id="v-star"> Starred only</label>
   <label><input type="checkbox" id="v-titles"> Idea titles on the map</label>
+  <label><input type="checkbox" id="v-demo"> Demo mode, for showing it to someone</label>
+  <div id="demo-opts" hidden><p class="vh">Hide what's tagged</p><div id="demo-cats"></div>
+    <label><input type="checkbox" id="v-redact"> Black out swearing</label></div>
   <p class="muted">Applies to the map, Time and List. Archive ideas count by when they were said again, not when
     they were imported.</p>
 </div>
@@ -350,12 +356,30 @@
 </form></dialog>
 <script>
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const store = {get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+               set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }};
+const escAttr = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+// Demo mode's settings (the rest is with rebuild): which tagged categories it hides, and whether swearing is
+// redacted. Redaction is here, in esc(), so it reaches every piece of text shown; attributes and edit fields use
+// escAttr() and keep the real words, so nothing redacted is ever saved back.
+const DEMO_CATS = [["sex", "Sex"], ["gender_politics", "Gender and sexual politics"],
+                   ["political_extremism", "Political extremism"], ["violence", "Violence"], ["racism", "Racism"],
+                   ["profanity", "Swearing (whole ideas)"]];
+const DEMO_DEFAULT = DEMO_CATS.map(c => c[0]).filter(c => c !== "profanity");   // swearing is blacked out instead
+let demo = store.get("demo") === "1";
+let demoCats = new Set((() => { try { return JSON.parse(store.get("demo-cats")); } catch { return null; } })()
+                       || DEMO_DEFAULT);
+let demoRedact = store.get("demo-redact") !== "0";
+const SWEARING = new RegExp("\\b(" + ["fuck\\w*", "motherfuck\\w*", "shit\\w*", "bullshit\\w*", "bitch\\w*", "cunts?",
+  "cocks?", "cocksuck\\w*", "dick(head)?s?", "puss(y|ies)", "ass(hole)?s?", "arse(hole)?s?", "bastards?", "piss\\w*",
+  "sluts?", "whores?", "damn\\w*", "goddamn\\w*", "twats?", "wank\\w*", "douche\\w*", "fag(got)?s?", "n[i1]gg\\w*",
+  "retards?", "spics?", "chinks?", "kikes?"].join("|") + ")\\b", "gi");
+const red = s => demo && demoRedact ? String(s ?? "").replace(SWEARING, w => "\u2588".repeat(w.length)) : String(s ?? "");
+const esc = s => escAttr(red(s));
 const day = iso => iso ? new Date(iso).toLocaleDateString(undefined, {month: "short", day: "numeric"}) : "";
 const when = iso => new Date(iso).toLocaleString(undefined, {weekday: "short", month: "short", day: "numeric",
                                                              hour: "numeric", minute: "2-digit"});
-const store = {get: k => { try { return localStorage.getItem(k); } catch { return null; } },
-               set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }};
 
 function toast(text) {
   const t = document.getElementById("toast");
@@ -413,6 +437,10 @@ function applyEvent(st, e) {
   } else if (e.kind.endsWith("_theme")) {
     const t = st.graph.themes.find(t => t.id === e.theme_id);
     if (t) e.kind === "reject_theme" ? t.rejected = true : t.pinned = e.kind === "pin_theme";
+  } else if (e.kind === "idea_sensitive" || e.kind === "theme_sensitive") {
+    const kind = e.kind === "idea_sensitive" ? "ideas" : "themes", key = e.idea_id || e.theme_id;
+    st.sensitivity ||= {ideas: {}, themes: {}};
+    st.sensitivity[kind][key] = {...(st.sensitivity[kind][key] || {categories: []}), sensitive: e.sensitive, by: "owner"};
   } else if (e.kind === "idea_add") {   // until Idea Machine places and files it: no themes, no position
     if (!idea) {
       const base = {id: e.idea_id, title: e.title, statement: e.statement, origin: "mine", themes: [], starred: false,
@@ -467,6 +495,58 @@ function applyThemeEvent(st, e) {
 function rebuild() {
   state = structuredClone(snap);
   pending.forEach(e => applyEvent(state, e));
+  if (demo) hideSensitive(state);
+}
+
+// --- Demo mode ------------------------------------------------------------------------------------------------
+// For showing Lattice to someone: ideas and themes tagged sensitive (pub.sensitivity: sex, gender and sexual
+// politics, political extremism, violence; Claude's tag, or my own mark, which wins) are taken out of the copy the
+// app renders, so every view leaves them out alike. Digest points citing a hidden idea go, and digest summaries
+// too: free text could mention anything. Swearing isn't a reason to tag.
+// My own mark decides (hide always, or never); otherwise Claude's tags, if any is a category I chose to hide.
+const isSensitive = (kind, i, st = state) => {
+  const s = st?.sensitivity?.[kind]?.[i];
+  return !s ? false : s.by === "owner" ? !!s.sensitive : (s.categories || []).some(c => demoCats.has(c));
+};
+
+function hideSensitive(st) {
+  const ideas = new Set(Object.keys(st.ideas).filter(i => isSensitive("ideas", i, st)));
+  const themes = new Set(st.graph.themes.filter(t => isSensitive("themes", t.id, st)).map(t => t.name));
+  st.graph.themes = st.graph.themes.filter(t => !themes.has(t.name));
+  st.graph.nodes = st.graph.nodes.filter(n => !ideas.has(n.id));
+  ideas.forEach(i => delete st.ideas[i]);
+  for (const x of [...st.graph.nodes, ...Object.values(st.ideas)]) x.themes = x.themes.filter(t => !themes.has(t));
+  st.graph.links = st.graph.links.filter(l => !ideas.has(id(l.source)) && !ideas.has(id(l.target)));
+  st.review.items = st.review.items.filter(i => i.idea && !ideas.has(i.idea.id));
+  st.review.audit = (st.review.audit || []).filter(a => st.review.items.some(i => i.id === a));
+  st.review.total = st.review.items.length;
+  for (const d of st.digests || []) {
+    d.summary = "";
+    d.points = d.points.filter(p => !p.idea_ids.some(i => ideas.has(i)));
+  }
+  for (const k of Object.keys(st.neighbours || {}))
+    if (ideas.has(k)) delete st.neighbours[k]; else st.neighbours[k] = st.neighbours[k].filter(([o]) => !ideas.has(o));
+  st.pairs = (st.pairs || []).filter(p => !ideas.has(p.first) && !ideas.has(p.second));
+  for (const t of st.graph.themes) t.ideas = st.graph.nodes.filter(n => n.themes.includes(t.name)).length;
+}
+
+// Marking an idea or theme sensitive, or not: my call wins over Claude's tag.
+function sensitivityLine(kind, itemId) {
+  const s = snap?.sensitivity?.[kind]?.[itemId];
+  const mine = [...pending].reverse().find(e => e.kind === (kind === "ideas" ? "idea_sensitive" : "theme_sensitive")
+    && (e.idea_id || e.theme_id) === itemId);
+  const on = mine ? mine.sensitive : isSensitive(kind, itemId, snap);
+  const what = on ? `Hidden in demo mode${s?.categories?.length ? ` (${s.categories.map(c => c.replace("_", " ")).join(", ")})` : ""}`
+    + ` · ${mine || s?.by === "owner" ? "your call" : "tagged by Claude"}` : "Shown in demo mode";
+  return `<p class="meta sens">${esc(what)} <button class="linkbtn" data-sens="${on ? "false" : "true"}">${on ? "Show it" : "Hide it"}</button></p>`;
+}
+function bindSensitivity(host, kind, itemId, again) {
+  host.querySelector("[data-sens]")?.addEventListener("click", async e => {
+    const sensitive = e.target.dataset.sens === "true";
+    await act(kind === "ideas" ? {kind: "idea_sensitive", idea_id: itemId, sensitive}
+                               : {kind: "theme_sensitive", theme_id: itemId, sensitive});
+    saved(); again();
+  });
 }
 
 // Every change I make: applied here at once, kept until the server has it.
@@ -664,7 +744,7 @@ function renderBatch() {
         to judge one by one. ` : ""}The other ${items.length} can be kept in one go: ${kinds}.</p>
       <details><summary>See the ${items.length}</summary>
         <p class="muted">Untick any you'd rather judge yourself.</p>
-        <ul class="rest">${items.map(i => `<li><label><input type="checkbox" data-id="${esc(i.id)}"
+        <ul class="rest">${items.map(i => `<li><label><input type="checkbox" data-id="${escAttr(i.id)}"
           ${mine.has(i.id) ? "" : "checked"}><span><span class="tag">${esc(i.kind)}</span> ${esc(i.gist)}</span></label></li>`).join("")}</ul>
       </details>
     </article>
@@ -914,10 +994,10 @@ const saved = () => toast(navigator.onLine ? "Saved" : "Saved on this device; se
 // Correct an idea or give it context. Corrections are read straight from the events, so they show at once.
 function editor(host, idea, onSaved) {
   host.innerHTML = `<div class="editor">
-      <label>Title<input id="ed-title" maxlength="120" value="${esc(idea.title)}"></label>
-      <label>What the idea is<textarea id="ed-statement" rows="3" maxlength="1000">${esc(idea.statement)}</textarea></label>
+      <label>Title<input id="ed-title" maxlength="120" value="${escAttr(idea.title)}"></label>
+      <label>What the idea is<textarea id="ed-statement" rows="3" maxlength="1000">${escAttr(idea.statement)}</textarea></label>
       <label>Context (optional): what Claude missed, where it came from<textarea id="ed-note" rows="2"
-        maxlength="1000">${esc(idea.note || "")}</textarea></label>
+        maxlength="1000">${escAttr(idea.note || "")}</textarea></label>
       <div class="edrow"><button id="ed-save">Save</button><button id="ed-cancel">Cancel</button></div></div>`;
   host.querySelector("#ed-cancel").addEventListener("click", () => host.innerHTML = "");
   host.querySelector("#ed-save").addEventListener("click", async () => {
@@ -992,8 +1072,13 @@ const viewActive = () => range !== "all" || starOnly;
 
 function renderView() {
   const b = document.getElementById("viewbtn");
-  b.textContent = ["View", range !== "all" && `${range} days`, starOnly && "\u2605"].filter(Boolean).join(" \u00b7 ");
-  b.dataset.active = viewActive();
+  b.textContent = ["View", range !== "all" && `${range} days`, starOnly && "\u2605", demo && "Demo"].filter(Boolean).join(" \u00b7 ");
+  b.dataset.active = viewActive() || demo;
+  document.getElementById("v-demo").checked = demo;
+  document.getElementById("demo-opts").hidden = !demo;
+  document.getElementById("v-redact").checked = demoRedact;
+  document.getElementById("demo-cats").innerHTML = DEMO_CATS.map(([k, label]) =>
+    `<label><input type="checkbox" data-cat="${k}" ${demoCats.has(k) ? "checked" : ""}> ${label}</label>`).join("");
   document.querySelectorAll("#rangeseg button").forEach(x => x.setAttribute("aria-pressed", x.dataset.range === range));
   document.getElementById("v-star").checked = starOnly;
   document.getElementById("v-titles").checked = titles;
@@ -1010,6 +1095,22 @@ document.addEventListener("click", e => {   // a tap elsewhere closes it
   }
 });
 const viewChanged = () => { renderView(); if (state) { renderCounts(); redrawMap(); filter(); } };
+const demoChanged = () => {
+  renderView();
+  if (snap) { rebuild(); shown = shownTheme = null; drawn = false; renderAll(); redrawMap(); cardId = null; renderCard(); }
+};
+document.getElementById("v-demo").addEventListener("change", e => {
+  demo = e.target.checked; store.set("demo", demo ? "1" : "0"); demoChanged();
+});
+document.getElementById("v-redact").addEventListener("change", e => {
+  demoRedact = e.target.checked; store.set("demo-redact", demoRedact ? "1" : "0"); demoChanged();
+});
+document.getElementById("demo-cats").addEventListener("change", e => {
+  const k = e.target.dataset.cat;
+  if (!k) return;
+  e.target.checked ? demoCats.add(k) : demoCats.delete(k);
+  store.set("demo-cats", JSON.stringify([...demoCats])); demoChanged();
+});
 document.querySelectorAll("#rangeseg button").forEach(b => b.addEventListener("click", () => {
   range = b.dataset.range; store.set("range", range); viewChanged();
 }));
@@ -1246,7 +1347,7 @@ let digestWeek = null;   // week_start shown; null: the newest
 // ideas and Claude asks what to make. The text is also copied, in case the app opens without it.
 function draftLink(what) {
   const ask = `Let's draft something from ${what}. Use draft_material, then ask me what to make, for whom and how long.`;
-  return `<a class="linkbtn draft" target="_blank" rel="noopener" data-ask="${esc(ask)}"
+  return `<a class="linkbtn draft" target="_blank" rel="noopener" data-ask="${escAttr(ask)}"
     href="https://claude.ai/new?q=${encodeURIComponent(ask)}">Draft with Claude</a>`;
 }
 document.addEventListener("click", e => {
@@ -1274,7 +1375,7 @@ function renderDigest(box) {
     box.innerHTML = chips + `<div class="digest">
       <div class="dnav"><button id="d-prev" ${at >= ds.length - 1 ? "disabled" : ""}>\u2039 Earlier</button>
         <b>${span}</b><button id="d-next" ${at === 0 ? "disabled" : ""}>Later \u203a</button></div>
-      <p class="dsum">${esc(d.summary)}</p>
+      ${d.summary ? `<p class="dsum">${esc(d.summary)}</p>` : ""}
       ${d.points.map(p => `<article class="point${p.mine === "dismiss" ? " dismissed" : ""}">
         <span class="tag">${esc(KIND[p.kind] || p.kind)}</span>
         <h3>${p.mine === "star" ? "\u2605 " : ""}${esc(p.title)}</h3><p>${esc(p.body)}</p>
@@ -1422,7 +1523,7 @@ function drawMap() {
     .style("cursor", "pointer")
     .on("mousemove", (e, n) => { const t = document.getElementById("tip");
       t.style.display = "block"; t.style.left = e.clientX + 12 + "px"; t.style.top = e.clientY + 12 + "px";
-      t.textContent = `${n.starred ? "★ " : ""}${n.title}${n.evidence ? ` · ${n.evidence} piece${n.evidence > 1 ? "s" : ""} of evidence` : ""}${isNew(n) ? " · new" : ""}`; })
+      t.textContent = `${n.starred ? "★ " : ""}${red(n.title)}${n.evidence ? ` · ${n.evidence} piece${n.evidence > 1 ? "s" : ""} of evidence` : ""}${isNew(n) ? " · new" : ""}`; })
     .on("mouseleave", () => { document.getElementById("tip").style.display = "none"; })
     .on("click", (e, n) => show(n.id))
     .call(d3.drag().filter(() => !territories)
@@ -1430,7 +1531,7 @@ function drawMap() {
       .on("drag", (e, n) => { n.fx = e.x; n.fy = e.y; })
       .on("end", (e, n) => { if (!e.active) sim.alphaTarget(0); n.fx = null; n.fy = null; }));
   const label = g.append("g").selectAll("text").data(nodes.filter(n => labelled.has(n.id))).join("text")
-    .text(n => `${n.starred ? "★ " : ""}${n.title}`).attr("dx", 10).attr("dy", 4);
+    .text(n => `${n.starred ? "★ " : ""}${red(n.title)}`).attr("dx", 10).attr("dy", 4);
 
   // Where each idea wants to be. With Idea Machine's semantic positions (pub.idea_positions), ideas sit by
   // meaning and themes show as the colors that gather; an idea without one goes to the middle of its theme's
@@ -1538,10 +1639,10 @@ function drawTerritories(g, nodes, order, {edge, node, label}) {
     shown.push({...sp, y});
   }
   g.append("g").selectAll("text").data(shown.filter(sp => sp.kind === "land")).join("text").attr("class", "land")
-    .attr("x", sp => sp.x).attr("y", sp => sp.y).attr("text-anchor", "middle").text(sp => short(sp.text));
+    .attr("x", sp => sp.x).attr("y", sp => sp.y).attr("text-anchor", "middle").text(sp => short(red(sp.text)));
   return g.append("g").selectAll("text").data(shown.filter(sp => sp.kind === "spot").map(sp => Object.assign(sp.n, {_ly: sp.y})))
     .join("text").attr("class", "spot").attr("x", n => n.x).attr("y", n => n._ly).attr("dx", 8).attr("dy", 4)
-    .text(n => short(`${n.starred ? "\u2605 " : ""}${n.title}`));
+    .text(n => short(`${n.starred ? "\u2605 " : ""}${red(n.title)}`));
 }
 
 document.getElementById("bridgebtn").addEventListener("click", e => {
@@ -1601,14 +1702,14 @@ function drawGrid() {
       const p = pairs.get(key(t.name, order[j].name)), cx = label + j * cell + cell / 2, cy = i * cell + cell / 2;
       svg += `<rect class="gcell" x="${label + j * cell}" y="${i * cell}" width="${cell}" height="${cell}"/>`;
       if (p) svg += `<circle cx="${cx}" cy="${cy}" r="${Math.max(2.5, (cell / 2 - 3) * Math.sqrt(p.weight / max))}"
-        data-pair="${esc(key(t.name, order[j].name))}"><title>${esc(t.name)} \u2194 ${esc(order[j].name)}: ${p.shared.length} in both, ${p.links.length} link${p.links.length === 1 ? "" : "s"}</title></circle>`;
+        data-pair="${escAttr(key(t.name, order[j].name))}"><title>${esc(t.name)} \u2194 ${esc(order[j].name)}: ${p.shared.length} in both, ${p.links.length} link${p.links.length === 1 ? "" : "s"}</title></circle>`;
     }
   });
   svg += `</svg>`;
   const top = [...pairs.values()].sort((x, y) => y.weight - x.weight).slice(0, 12);
   box.innerHTML = `<div class="gridview"><p class="intro">How your themes connect: a bigger dot, more ideas in both or
       linked across. Each column belongs to the theme at its top, the coloured dot.</p>${svg}
-    <h3>Strongest connections</h3>${top.map(p => `<button class="gpair" data-pair="${esc(key(p.a, p.b))}">
+    <h3>Strongest connections</h3>${top.map(p => `<button class="gpair" data-pair="${escAttr(key(p.a, p.b))}">
       <span class="gbar" style="width:${Math.round(100 * p.weight / max)}%"></span>
       <span>${esc(p.a)} \u2194 ${esc(p.b)}</span><span class="n">${p.shared.length} in both \u00b7 ${p.links.length} links</span></button>`).join("")
       || `<p class="intro">No two themes share or link ideas in this view.</p>`}</div>`;
@@ -1733,7 +1834,7 @@ function showTheme(themeId) {
     `<p class="themetools"><button class="linkbtn" id="th-rename">Rename</button> ` +
       `<button class="linkbtn" id="th-merge">Merge into\u2026</button> ` +
       (ideas.length > 1 ? `<button class="linkbtn" id="th-split">Split\u2026</button>` : "") + `</p>` +
-    `<div id="themeedit"></div>` +
+    `<div id="themeedit"></div>` + sensitivityLine("themes", t.id) +
     (t.description ? `<p class="statement">${esc(t.description)}</p>` : "") +
     `<p class="meta">${ideas.length} idea${ideas.length === 1 ? "" : "s"}${status ? ` · ${status}` : ""}` +
       (ideas.length > 1 ? ` · ${draftLink(`my Lattice theme "${t.name}"`)}` : "") + `</p>` +
@@ -1749,6 +1850,7 @@ function showTheme(themeId) {
   }));
   body.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go, themeId)));
   themeTools(t, ideas);
+  bindSensitivity(body, "themes", t.id, () => showTheme(t.id));
   filter();
   zoomTo(ideas);
 }
@@ -1759,7 +1861,7 @@ function themeTools(t, ideas) {
   const taken = name => state.graph.themes.some(x => x.id !== t.id && x.name.toLowerCase() === name.toLowerCase());
   const done = async (event, then) => { await act(event); saved(); redrawMap(); renderList(); then(); };
   document.getElementById("th-rename").addEventListener("click", () => {
-    box.innerHTML = `<div class="editor"><label>Name<input id="th-name" maxlength="80" value="${esc(t.name)}"></label>
+    box.innerHTML = `<div class="editor"><label>Name<input id="th-name" maxlength="80" value="${escAttr(t.name)}"></label>
       <div class="edrow"><button id="th-ok">Rename</button><button id="th-no">Cancel</button></div></div>`;
     const input = box.querySelector("#th-name");
     input.focus(); input.select();
@@ -1850,7 +1952,7 @@ function show(ideaId, viaTheme) {
     `</p><p class="ideathemes">${d.themes.map(name => { const th = state.graph.themes.find(x => x.name === name);
         return th ? `<span class="tchip"><button class="linkbtn" data-theme="${th.id}">${esc(name)}</button><button
           class="linkbtn" data-unfile="${th.id}" aria-label="Take out of ${esc(name)}">\u00d7</button></span>` : esc(name); }).join("")}
-      <button class="linkbtn" id="fileidea">+ Theme</button></p><div id="filer"></div>` +
+      <button class="linkbtn" id="fileidea">+ Theme</button></p><div id="filer"></div>` + sensitivityLine("ideas", ideaId) +
     (d.notes ? `<p class="notes">${esc(d.notes)}</p>` : "") +
     (bridges().has(ideaId) ? `<p class="meta">Bridges ${bridges().get(ideaId).spans.map(esc).join(" \u2194 ")}</p>` : "") +
     (d.ranking ? `<p class="meta">Score ${d.ranking.score.toFixed(2)} · generality ${d.ranking.generality} · ` +
@@ -1883,6 +1985,7 @@ function show(ideaId, viaTheme) {
     redrawMap(); renderList(); show(ideaId);
   });
   panel.querySelector("#linkidea").addEventListener("click", () => linker(ideaId));
+  bindSensitivity(panel, "ideas", ideaId, () => show(ideaId, viaTheme));
   // Filing by hand: open a theme, take the idea out of one, or put it into another.
   const refile = async event => { await act(event); saved(); redrawMap(); renderList(); show(ideaId, viaTheme); };
   panel.querySelectorAll("[data-theme]").forEach(b => b.addEventListener("click", () => showTheme(b.dataset.theme)));
