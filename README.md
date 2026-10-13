@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lattice-mark-dark.svg">
+    <img src="docs/assets/lattice-mark-light.svg" alt="Lattice" width="120">
+  </picture>
+</p>
+
 # Lattice
 
 The presentation layer over Idea Machine's idea lattice (`~/data/code/ideamachine`, ROADMAP §3.5 and Phase 2).

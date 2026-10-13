@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 122" width="120" height="122" role="img" aria-label="Lattice">
+<defs><mask id="under-flash" maskUnits="userSpaceOnUse" x="0" y="0" width="120" height="122"><rect width="120" height="122" fill="#fff"/><polyline points="60,10 84,24 36,24 84,52 36,52 60,66 84,80 36,80 60,94 60,112" fill="none" stroke="#000" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></mask></defs>
+<g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M60 10L84 24M60 10L36 24M60 10L60 66M84 24L36 24M84 24L60 66M84 24L84 52M36 24L60 66M36 24L36 52M84 52L36 52M84 52L60 66M84 52L84 80M36 52L60 66M36 52L36 80M60 66L84 80M60 66L60 94M60 66L36 80M84 80L36 80M84 80L60 94M84 80L60 112M36 80L60 94M36 80L60 112M60 94L60 112" stroke="#E8E4DA" stroke-opacity="0.16" stroke-width="1.5"/>
+<path d="M60 116C44 110 42 98 60 94S84 72 60 66S34 44 60 38S86 18 60 10" stroke="#E8E4DA" stroke-width="2.6" mask="url(#under-flash)"/>
+<polyline points="60,10 84,24 36,24 84,52 36,52 60,66 84,80 36,80 60,94 60,112" stroke="#9DB0FF" stroke-width="3.5"/>
+</g>
+<circle cx="60" cy="10" r="4" fill="#E8E4DA"/>
+<circle cx="84" cy="24" r="3.5" fill="#E8E4DA"/>
+<circle cx="36" cy="24" r="3.5" fill="#E8E4DA"/>
+<circle cx="84" cy="52" r="3.5" fill="#E8E4DA"/>
+<circle cx="36" cy="52" r="3.5" fill="#E8E4DA"/>
+<circle cx="60" cy="66" r="3.5" fill="#E8E4DA"/>
+<circle cx="84" cy="80" r="3.5" fill="#E8E4DA"/>
+<circle cx="36" cy="80" r="3.5" fill="#E8E4DA"/>
+<circle cx="60" cy="94" r="3.5" fill="#E8E4DA"/>
+<circle cx="60" cy="112" r="3.5" fill="#E8E4DA"/>
+</svg>
