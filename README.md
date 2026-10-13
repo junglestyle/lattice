@@ -44,7 +44,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
   `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, `compare_pair`, `review_digest`, and, when you
   ask, `star_idea`, `link_ideas`, `note_idea`, `record_comparison`, `decide_item` (your verdict on a spot check) and
-  `keep_rest` (the rest, in bulk). "Let's catch up on review" works by voice.
+  `keep_rest` (the rest, in bulk), plus `look_again` (kept unread, now mattering; `whats_new` counts them). "Let's
+  catch up on review" works by voice.
   It takes the Lattice token as a bearer header and is tailnet-only like the rest. For claude.ai and the phone
   app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",
   "unknown", S1, S2...), as in Idea Machine's privacy policy B. From Claude Code on a tailnet machine:

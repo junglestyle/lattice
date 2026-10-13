@@ -90,3 +90,36 @@ def test_evidence_says_how_its_verdict_was_made():
         evidence = [ev for evs in data.evidence_of(conn).values() for ev in evs]
     assert evidence and all(ev["how"] in (None, "one", "audit", "bulk") for ev in evidence)
     assert all(ev["how"] is None for ev in evidence if ev["verdict"] is None)
+
+
+def test_kept_unread_comes_back_when_it_matters():
+    g = {"themes": [{"name": "A"}, {"name": "B"}],
+         "nodes": [{"id": "x", "themes": ["A"]}, {"id": "y", "themes": ["B"]}, {"id": "z", "themes": ["A"]}],
+         "links": [{"source": "x", "target": "y", "kind": "evolves"}, {"source": "z", "target": "x", "kind": "related"}]}
+    spans = data.bridges(g)
+    assert spans == {"x": ["A", "B"], "y": ["A", "B"]}   # the evolves link crosses themes; z only touches A
+    assert data.why_it_matters("x", g, [{}], spans, []) == ["it evolves another idea", "it bridges A ↔ B"]
+    assert data.why_it_matters("z", g, [{}], spans, []) == []                   # related alone doesn't count
+    assert data.why_it_matters("z", g, [{}, {}], spans, [["x", "z"]]) == ["it came up in a comparison",
+                                                                          "it was said again"]
+
+
+@needs_db
+def test_look_again_by_conversation(url, admin, monkeypatch):
+    found = tool(url, "look_again")["structuredContent"]
+    assert {"kept_unread_worth_a_look", "captures", "how"} <= set(found)
+    assert "kept_unread_worth_a_look" in tool(url, "whats_new")["structuredContent"]
+    # In process, as if every keep so far had been a bulk keep: real ideas, links and themes.
+    from lattice import mcp
+    real = data.evidence_of
+    monkeypatch.setattr(data, "evidence_of", lambda conn, idea_id=None: {
+        i: [{**ev, "how": "bulk" if ev["verdict"] == "keep" else ev["how"]} for ev in evs]
+        for i, evs in real(conn, idea_id).items()})
+    with data.connect() as conn:
+        result = mcp.look_again(conn, limit=20)
+    if not result["captures"]:
+        pytest.skip("no kept capture in this database whose idea matters")
+    names = {n for (n,) in admin.execute("SELECT DISTINCT said_by FROM pub.evidence")} - {"me", "unknown"}
+    assert all(c["why"] and c["said_by"] not in names for c in result["captures"])
+    reasons = [len(c["why"]) for c in result["captures"]]
+    assert reasons == sorted(reasons, reverse=True)

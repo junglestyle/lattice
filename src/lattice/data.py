@@ -116,6 +116,57 @@ def compared(conn) -> list[list[str]]:
         "SELECT DISTINCT idea_id, other_idea_id FROM pub.feedback_events WHERE kind = 'idea_compare'")]
 
 
+def bridges(g: dict) -> dict:
+    """Ideas where themes meet, as the map's Bridges switch shows them (index.html's bridges(); keep the two alike):
+    an idea touching two or more themes, through its own or its links' themes, that is in two itself or has a link
+    to an idea sharing none of its themes. idea id -> the themes it spans."""
+    themes_of = {n["id"]: n["themes"] for n in g["nodes"]}
+    out = {}
+    for n in g["nodes"]:
+        touched, cross = set(n["themes"]), 0
+        for link in g["links"]:
+            other = link["target"] if link["source"] == n["id"] else link["source"] if link["target"] == n["id"] else None
+            if not other or not themes_of.get(other):
+                continue
+            if not set(themes_of[other]) & set(n["themes"]):
+                cross += 1
+            touched |= set(themes_of[other])
+        if len(touched) >= 2 and (len(n["themes"]) >= 2 or cross):
+            out[n["id"]] = [t["name"] for t in g["themes"] if t["name"] in touched]
+    return out
+
+
+def why_it_matters(idea_id: str, g: dict, evidence: list, spans: dict, pairs: list) -> list[str]:
+    """What makes a kept-unread capture worth a real verdict now (index.html's mattered(); keep the two alike).
+    'related' links alone don't count: Idea Machine finds those for nearly everything."""
+    kinds = {link["kind"] for link in g["links"] if idea_id in (link["source"], link["target"])}
+    why = [w for k, w in (("mine", "you linked it"), ("evolves", "it evolves another idea"),
+                          ("archive", "it echoes your archive")) if k in kinds]
+    if idea_id in spans:
+        why.append("it bridges " + " \u2194 ".join(spans[idea_id]))
+    if any(idea_id in p for p in pairs):
+        why.append("it came up in a comparison")
+    if len(evidence) > 1:
+        why.append("it was said again")
+    return why
+
+
+def look_again(conn) -> list[dict]:
+    """Captures I kept in bulk without reading (pub.evidence.how = 'bulk') whose idea has since turned out to
+    matter, most reasons first, then most recent."""
+    evidence = evidence_of(conn)
+    if not any(ev["how"] == "bulk" for evs in evidence.values() for ev in evs):
+        return []
+    g, pairs = graph(conn), compared(conn)
+    spans, titles = bridges(g), {n["id"]: n["title"] for n in g["nodes"]}
+    out = []
+    for idea_id, evs in evidence.items():
+        unread = [ev for ev in evs if ev["verdict"] == "keep" and ev["how"] == "bulk"]
+        why = why_it_matters(str(idea_id), g, evs, spans, pairs) if unread else []
+        out += [{**ev, "idea_id": str(idea_id), "idea": titles.get(str(idea_id)), "why": why} for ev in unread if why]
+    return sorted(out, key=lambda x: (len(x["why"]), x["said_at"]), reverse=True)
+
+
 def next_pair(conn, rng=random) -> dict | None:
     """One pair to ask "which is better?" about: Idea Machine's pick if it publishes any, else two ideas with
     neighbouring scores, else two ideas sharing a theme. Never a pair already compared; the order shown is random,

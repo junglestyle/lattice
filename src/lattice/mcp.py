@@ -25,7 +25,10 @@ feedback: do them when they ask, not on your own initiative.
 
 To review new captures, call review_digest: read the owner the spot checks one at a time and record their own
 verdict on each with decide_item (never your guess), then offer to keep the rest with keep_rest. The owner's
-default is to keep: the lattice gets its value from connections as it grows."""
+default is to keep: the lattice gets its value from connections as it grows. Captures kept that way come back
+through look_again once their idea turns out to matter; offer them after the spot checks, and record the owner's
+verdict with decide_item. Discards are the owner's high-signal verdict: when they discard, ask why in a few words
+and pass it as the note."""
 
 
 def _pseudonymize(rows: list[dict], key: str = "said_by", alias: dict | None = None) -> list[dict]:
@@ -159,10 +162,11 @@ def whats_new(conn, since: str | None = None) -> dict:
     themes = [n for (n,) in conn.execute(
         "SELECT name FROM pub.themes WHERE origin = 'clustered' AND NOT pinned ORDER BY name")]
     waiting = conn.execute("SELECT count(*) FROM pub.review_items").fetchone()[0]
+    unread = len(data.look_again(conn))
     total = conn.execute("SELECT count(*) FROM pub.ideas WHERE created_at >= %s", (start,)).fetchone()[0]
     return {"since": start.isoformat(), "new_ideas_total": total, "new_ideas": [_brief(r) for r in ideas],
             "proposed_themes": themes,
-            "captures_waiting_for_review": waiting}
+            "captures_waiting_for_review": waiting, "kept_unread_worth_a_look": unread}
 
 
 def review_digest(conn) -> dict:
@@ -191,6 +195,16 @@ def review_digest(conn) -> dict:
             "how": "Spot checks are spread across Idea Machine's confidence, lowest first. Read each to the owner "
                    "and record what they say with decide_item(spot_check=true). Then offer to keep the rest: if they want to judge "
                    "some of them themselves, leave those out of keep_rest's item_ids."}
+
+
+def look_again(conn, limit: int = 5) -> dict:
+    found = data.look_again(conn)
+    shown = _pseudonymize([{k: ev[k] for k in ("item_id", "idea_id", "idea", "kind", "said_by", "said_at", "quote",
+                                               "gist", "why")} for ev in found[:max(1, min(int(limit), 20))]])
+    return {"kept_unread_worth_a_look": len(found), "captures": shown,
+            "how": "Each was kept with the rest without being read, and its idea has since turned out to matter "
+                   "(why). Read the quote and why to the owner and record their verdict with decide_item "
+                   "(spot_check=false). Keeping it again is fine; a discard is the useful signal, with a reason."}
 
 
 VERDICTS = {"keep": "item_keep", "star": "item_star", "discard": "item_discard"}
@@ -279,6 +293,10 @@ TOOLS = {
     "review_digest": (review_digest, True, "The captures waiting for review: a few spot checks, picked across "
                       "Idea Machine's confidence for the owner to judge one by one, and the rest summarized for "
                       "keeping in one go. Use when the owner wants to review or catch up.", {}, []),
+    "look_again": (look_again, True, "Captures the owner kept in bulk without reading whose idea has since turned "
+                   "out to matter (linked, evolving, echoing the archive, bridging themes, compared, said again), "
+                   "for a real verdict. Use after the spot checks or when the owner asks what's worth a second look.",
+                   {"limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5}}, []),
     "decide_item": (decide_item, False, "Record the owner's own verdict on one capture (a spot check, or any item "
                     "they chose to judge). Never decide for them.",
                     {"item_id": {"type": "string", "description": "A capture's item_id from review_digest"},
