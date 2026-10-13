@@ -33,7 +33,12 @@ and pass it as the note.
 
 When the owner wants to add an idea from your conversation: search_ideas first, and if an existing idea says the
 same, offer a note or a link instead. Otherwise draft a short title and a one-to-three-sentence statement in the
-owner's own terms, read them back, and call add_idea only once they approve the wording."""
+owner's own terms, read them back, and call add_idea only once they approve the wording.
+
+To draft something from the lattice (an outline, essay, guide, talk), call draft_material for a theme, a digest
+point or a set of ideas, then ask the owner what form, audience and length they want before writing. Write in
+their voice from their ideas; quote them sparingly; say where ideas pull against each other rather than smoothing
+it over; don't add claims they haven't made without marking them as yours."""
 
 
 def _pseudonymize(rows: list[dict], key: str = "said_by", alias: dict | None = None) -> list[dict]:
@@ -151,6 +156,89 @@ def open_theme(conn, theme: str) -> dict:
     ideas = conn.execute(f"SELECT {BRIEF} FROM pub.ideas WHERE %s = ANY(themes) ORDER BY starred DESC, n_evidence DESC, title",
                          (name,)).fetchall()
     return {"id": str(tid), "name": name, "description": description, "ideas": [_brief(r) for r in ideas]}
+
+
+MAX_DRAFT_IDEAS = 40
+
+
+def _reading_order(ids: list[str], links: list[dict], weight: dict) -> tuple[list[list[str]], list[str]]:
+    """Group connected ideas and walk each group so neighbours stay together: largest group first, each walked
+    breadth-first from its best-connected idea (ties: weight, then id, so the order is stable). Ideas with no link in the set come back separately."""
+    adj = {i: set() for i in ids}
+    for link in links:
+        adj[link["a"]].add(link["b"]), adj[link["b"]].add(link["a"])
+    seen, groups = set(), []
+    for start in sorted(ids, key=lambda i: (-len(adj[i]), -weight[i], i)):
+        if start in seen or not adj[start]:
+            continue
+        walk, queue = [], [start]
+        seen.add(start)
+        while queue:
+            i = queue.pop(0)
+            walk.append(i)
+            for j in sorted(adj[i] - seen, key=lambda j: (-len(adj[j]), -weight[j], j)):
+                seen.add(j), queue.append(j)
+        groups.append(walk)
+    loose = sorted((i for i in ids if not adj[i]), key=lambda i: -weight[i])
+    return sorted(groups, key=len, reverse=True), loose
+
+
+def draft_material(conn, theme: str | None = None, digest_week: str | None = None, point: int | None = None,
+                   idea_ids: list | None = None) -> dict:
+    if sum(x is not None for x in (theme, point, idea_ids)) != 1:
+        raise ToolError("give exactly one source: theme, a digest point (point, with digest_week for an older week), "
+                        "or idea_ids")
+    if theme is not None:
+        t = open_theme(conn, theme)
+        source = {"kind": "theme", "name": t["name"], "description": t["description"]}
+        ids = [i["id"] for i in t["ideas"]]
+    elif point is not None:
+        d = weekly_digest(conn, digest_week)
+        p = next((p for p in d["points"] if p["point"] == point), None)
+        if p is None:
+            raise ToolError(f"that digest has points 1 to {len(d['points'])}")
+        source = {"kind": "digest point", "week_start": d["week_start"], "title": p["title"], "body": p["body"]}
+        ids = [i["id"] for i in p["ideas"]]
+    else:
+        ids = list(dict.fromkeys(_uuid(i) for i in idea_ids))
+        source = {"kind": "chosen ideas"}
+    if not ids:
+        raise ToolError("no ideas left in that source (they may have been forgotten or discarded)")
+    ids = ids[:MAX_DRAFT_IDEAS]
+    ranked = data.scores(conn)
+    alias: dict = {}
+    ideas = {}
+    for i in ids:
+        found = data.idea(conn, i)
+        if found is None:
+            continue
+        quotes = [{"said_by": ev["said_by"], "said_at": ev["said_at"][:10], "quote": ev["quote"]}
+                  for ev in found["evidence"] if ev["verdict"] != "discard"][:3]
+        _pseudonymize(quotes, alias=alias)
+        score = ranked.get(UUID(i), {}).get("score")
+        ideas[i] = {"id": i, "title": found["title"], "statement": found["statement"],
+                    "origin": {"mine": "added by you", "archive": "from your archive"}.get(found["origin"], "said"),
+                    "your_note": found["my_note"], "context": found["notes"], "starred": found["starred"],
+                    "times_said": len(found["evidence"]), "score": round(score, 2) if score is not None else None,
+                    "quotes": quotes}
+    if not ideas:
+        raise ToolError("none of those ideas exist (they may have been forgotten)")
+    links = [{"a": str(a), "b": str(b), "kind": "your link" if k == "mine" else k}
+             for a, b, k in conn.execute(
+                 """SELECT a, b, kind FROM pub.connections WHERE a = ANY(%(i)s::uuid[]) AND b = ANY(%(i)s::uuid[])
+                    ORDER BY kind""", {"i": list(ideas)})]
+    weight = {i: 2 * x["starred"] + x["times_said"] + (x["score"] or 0) for i, x in ideas.items()}
+    groups, loose = _reading_order(list(ideas), links, weight)
+    title = lambda i: ideas[i]["title"]   # noqa: E731
+    return {"source": source, "ideas": list(ideas.values()),
+            "connections": [{**link, "a_title": title(link["a"]), "b_title": title(link["b"])} for link in links],
+            "suggested_order": {"connected_groups": [[title(i) for i in g] for g in groups],
+                                "loose_ends": [title(i) for i in loose]},
+            "how": "Ask the owner what to make (outline, essay, one-page guide, talk, thread), for whom, and how long, "
+                   "before drafting. Build from these ideas in their words: statements and notes are the owner's "
+                   "thinking; quotes are what was actually said (S1, S2 are other people, renumbered per answer). "
+                   "The suggested order keeps connected ideas together; loose ends may not belong. Flag tensions "
+                   "between ideas instead of resolving them silently, and mark anything you add."}
 
 
 def whats_new(conn, since: str | None = None) -> dict:
@@ -357,6 +445,16 @@ TOOLS = {
                            "rating": {"type": "string", "enum": ["star", "dismiss"]},
                            "note": {"type": "string", "maxLength": 500, "description": "Why, if the owner said"}},
                           ["digest_id", "point", "rating"]),
+    "draft_material": (draft_material, True, "Everything needed to draft a piece of writing from the owner's lattice: "
+                       "the ideas in a theme, a weekly digest point or a chosen set, with their notes, quotes, "
+                       "connections and a suggested reading order. Use when the owner wants to write, outline or "
+                       "turn a cluster into something.",
+                       {"theme": {"type": "string", "description": "A theme's name (or part of it) or id"},
+                        "point": {"type": "integer", "minimum": 1,
+                                  "description": "A point number in the weekly digest"},
+                        "digest_week": {"type": "string", "description": "An ISO date in the digest's week; default "
+                                                                         "the latest"},
+                        "idea_ids": {"type": "array", "items": ID, "maxItems": MAX_DRAFT_IDEAS}}, []),
     "add_idea": (add_idea, False, "Add the owner's own idea to the lattice, worded as they approved: a short title, "
                  "a one-to-three-sentence statement, optional context, and optional ideas it connects to. Only after "
                  "they approve the wording; search_ideas first for one it may repeat.",

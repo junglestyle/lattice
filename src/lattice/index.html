@@ -75,6 +75,7 @@
   .point .ideas { display: flex; flex-wrap: wrap; gap: 6px; }
   .point .ideas button { border-radius: 999px; padding: 3px 10px; font-size: 13px; text-align: left; }
   .point .prow { display: flex; gap: 8px; margin-top: 8px; }
+  .point .prow { align-items: center; flex-wrap: wrap; }
   .point .prow button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--text-secondary); }
   .point.dismissed h3, .point.dismissed p { opacity: 0.55; }
   main[data-view="map"] #mapview { display: grid; grid-template-columns: 1fr 380px; }
@@ -967,6 +968,18 @@ const KIND = {recurring: "Keeps coming up", convergence: "Converging", sleeper: 
               outside_value: "Worth sharing"};
 let digestWeek = null;   // week_start shown; null: the newest
 
+// "Draft with Claude": opens claude.ai with the request written, where the connector's draft_material gathers the
+// ideas and Claude asks what to make. The text is also copied, in case the app opens without it.
+function draftLink(what) {
+  const ask = `Let's draft something from ${what}. Use draft_material, then ask me what to make, for whom and how long.`;
+  return `<a class="linkbtn draft" target="_blank" rel="noopener" data-ask="${esc(ask)}"
+    href="https://claude.ai/new?q=${encodeURIComponent(ask)}">Draft with Claude</a>`;
+}
+document.addEventListener("click", e => {
+  const a = e.target.closest("a.draft");
+  if (a) navigator.clipboard?.writeText(a.dataset.ask).catch(() => {});
+});
+
 function renderDigestBadge() {
   const newest = state.digests?.[0];
   document.getElementById("tbadge").textContent = newest && newest.id > +(store.get("digest-seen") || 0) ? "\u2022" : "";
@@ -996,7 +1009,8 @@ function renderDigest(box) {
         <div class="ideas">${p.idea_ids.filter(i => state.ideas[i]).map(i =>
           `<button data-go="${i}">${esc(state.ideas[i].title)}</button>`).join("")}</div>
         <div class="prow"><button data-p="${p.point}" data-r="digest_star" aria-pressed="${p.mine === "star"}">\u2605 Worth it</button>
-          <button data-p="${p.point}" data-r="digest_dismiss" aria-pressed="${p.mine === "dismiss"}">Not useful</button></div>
+          <button data-p="${p.point}" data-r="digest_dismiss" aria-pressed="${p.mine === "dismiss"}">Not useful</button>
+          ${draftLink(`point ${p.point} ("${p.title}") of my Lattice weekly digest for the week of ${d.week_start}`)}</div>
       </article>`).join("")}</div>`;
     box.querySelector("#d-prev").addEventListener("click", () => { digestWeek = ds[at + 1].week_start; renderTimeline(); });
     box.querySelector("#d-next").addEventListener("click", () => { digestWeek = ds[at - 1].week_start; renderTimeline(); });
@@ -1353,7 +1367,8 @@ function showTheme(themeId) {
       (t.pinned && t.proposed ? ` <button data-act="unpin_theme">Unpin</button>` : "") + `</p>` +
     `<h2>${esc(t.name)}</h2>` +
     (t.description ? `<p class="statement">${esc(t.description)}</p>` : "") +
-    `<p class="meta">${ideas.length} idea${ideas.length === 1 ? "" : "s"}${status ? ` · ${status}` : ""}</p>` +
+    `<p class="meta">${ideas.length} idea${ideas.length === 1 ? "" : "s"}${status ? ` · ${status}` : ""}` +
+      (ideas.length > 1 ? ` · ${draftLink(`my Lattice theme "${t.name}"`)}` : "") + `</p>` +
     ideas.map(n => `<div class="ev"><button class="linkbtn idea-link" data-go="${n.id}">${n.starred ? "★ " : ""}${esc(n.title)}</button>` +
       `<div class="by">${n.score != null ? `score ${n.score.toFixed(2)} · ` : ""}${n.evidence ? `${n.evidence} evidence · ` : ""}` +
       `${n.origin === "archive" ? "archive" : n.origin === "mine" ? "added by you" : day(n.last_said)}${isNew(n) ? " \u00b7 new" : ""}` +

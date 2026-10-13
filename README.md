@@ -26,6 +26,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **+ Idea**: add your own idea (title, statement, optional context). It's an `idea_add` event with an id made on
   the device, so it shows on the map at once ("Added by you") and can be starred or linked before Idea Machine
   embeds, places and files it on its next run.
+- **Draft with Claude** (on a theme, and on each digest point): opens claude.ai with the request written (and
+  copied), where `draft_material` gathers the ideas and Claude asks what to make before writing.
 - **Week** (in the Time tab): Idea Machine's weekly digest (`pub.digests`): a summary, then points (what keeps
   coming up, what converges, sleepers, projects forming, what a stranger would value), each with its ideas as chips
   that open the map, and ★ Worth it / Not useful (`digest_star` / `digest_dismiss`). A dot on the tab marks a new one.
@@ -50,7 +52,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
   `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, `compare_pair`, `review_digest`, and, when you
   ask, `star_idea`, `link_ideas`, `note_idea`, `record_comparison`, `decide_item` (your verdict on a spot check) and
-  `keep_rest` (the rest, in bulk), `add_idea` (worded with you, after a search for repeats), `weekly_digest` / `rate_digest_point`, plus `look_again` (kept unread, now mattering; `whats_new` counts them). "Let's
+  `keep_rest` (the rest, in bulk), `add_idea` (worded with you, after a search for repeats), `draft_material` (a theme, digest point or set of ideas
+  with notes, quotes, connections and a reading order, for Claude to draft from), `weekly_digest` / `rate_digest_point`, plus `look_again` (kept unread, now mattering; `whats_new` counts them). "Let's
   catch up on review" works by voice.
   It takes the Lattice token as a bearer header and is tailnet-only like the rest. For claude.ai and the phone
   app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",

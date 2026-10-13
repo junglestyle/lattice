@@ -179,3 +179,34 @@ def test_adding_an_idea(url, admin):
         made = locals().get("made", [new])
         admin.execute("DELETE FROM pub.feedback_events WHERE idea_id = ANY(%s::uuid[])", (made,))
         admin.execute("DELETE FROM im.ideas WHERE idea_id = ANY(%s::uuid[]) AND origin = 'mine'", (made,))
+
+
+def test_a_reading_order_keeps_neighbours_together():
+    from lattice.mcp import _reading_order
+
+    ids = list("abcdef")
+    links = [{"a": "a", "b": "b"}, {"a": "b", "b": "c"}, {"a": "d", "b": "e"}]
+    groups, loose = _reading_order(ids, links, {i: 0 for i in ids} | {"f": 5})
+    assert groups == [["b", "a", "c"], ["d", "e"]] and loose == ["f"]
+
+
+@needs_db
+def test_draft_material(url, admin):
+    themes = tool(url, "list_themes")["structuredContent"]["themes"]
+    theme = max(themes, key=lambda t: t["ideas"])
+    got = tool(url, "draft_material", theme=theme["name"])["structuredContent"]
+    assert got["source"]["name"] == theme["name"] and got["ideas"] and "how" in got
+    titles = {i["title"] for i in got["ideas"]}
+    order = got["suggested_order"]
+    assert set(sum(order["connected_groups"], []) + order["loose_ends"]) == titles   # every idea, once
+    names = {n for (n,) in admin.execute("SELECT DISTINCT said_by FROM pub.evidence")} - {"me", "unknown"}
+    speakers = {q["said_by"] for i in got["ideas"] for q in i["quotes"]}
+    assert not speakers & names
+    picked = [i["id"] for i in got["ideas"][:2]]
+    assert len(tool(url, "draft_material", idea_ids=picked)["structuredContent"]["ideas"]) == 2
+    assert tool(url, "draft_material")["isError"]
+    assert tool(url, "draft_material", theme="x", idea_ids=picked)["isError"]
+    if json.loads(request(url + "/api/snapshot", login(url))[2]).get("digests"):
+        point = tool(url, "draft_material", point=1)["structuredContent"]
+        assert point["source"]["kind"] == "digest point" and point["ideas"]
+        assert tool(url, "draft_material", point=99)["isError"]
