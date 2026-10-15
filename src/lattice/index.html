@@ -103,6 +103,8 @@
   .hint { color: var(--text-muted); }
   .theme-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-top: 1px solid var(--border); }
   .theme-row .name { flex: 1; }
+  .theme-row .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  label.linksout { display: flex; gap: 6px; align-items: baseline; font-size: 13px; color: var(--text-secondary); margin: 4px 0 8px; }
   .theme-row { cursor: pointer; }
   .theme-row:hover { background: var(--surface-2); }
   .theme-row .chev { color: var(--text-muted); font-size: 18px; padding: 0 2px 0 4px; }
@@ -201,7 +203,7 @@
   #themestrip { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 2; display: flex; gap: 6px;
                 align-items: center; pointer-events: none; }
   #themestrip > * { pointer-events: auto; }
-  #themestrip .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0; flex: 1;
+  #themestrip .chips { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0; flex: 1;
                        padding: 2px; }
   #themestrip .chips::-webkit-scrollbar { display: none; }
   #themestrip button { white-space: nowrap; border-radius: 999px; padding: 4px 10px; font-size: 13px;
@@ -1195,8 +1197,8 @@ const focusTheme = () => state.graph.themes.find(t => t.id === (shownTheme || fr
 function filter() {
   const focus = focusTheme();
   const b = bridgesOn ? bridges() : null;
-  const lit = n => hit(n) && (!focus || n.themes.includes(focus)) && (!b || b.has(n.id));
-  if (mapNodes) mapNodes.attr("opacity", n => lit(n) ? 1 : 0.15);
+  const lit = n => hit(n) && (mapFocus || !focus || n.themes.includes(focus)) && (!b || b.has(n.id));
+  if (mapNodes) mapNodes.attr("opacity", n => !lit(n) ? 0.15 : mapGhosts.has(n.id) ? 0.45 : 1);
   if (mapLabels) mapLabels.attr("opacity", n => lit(n) ? 1 : 0.2);
   if (mapEdges) mapEdges.attr("stroke-opacity", l => !b || crossLink(l) ? 1 : 0.1);
   if (mapMode === "grid" && drawn && document.body.dataset.view === "map") drawGrid();   // search and View
@@ -1206,16 +1208,16 @@ function filter() {
 }
 
 // Theme by theme: a strip over the map to step through the themes (‹ ›) or jump to one; All shows the whole map.
-function renderStrip() {
+function renderStrip(empty) {
   const box = document.getElementById("graph");
-  if (mapMode === "grid" || !mapNodes || !box.querySelector("svg")) return;
+  if (mapMode === "grid" || (!empty && (!mapNodes || !box.querySelector("svg")))) return;
   let strip = document.getElementById("themestrip");
   if (!strip) { strip = document.createElement("div"); strip.id = "themestrip"; box.append(strip); }
   const themes = state.graph.themes.filter(t => !t.rejected);
-  const at = themes.findIndex(t => t.id === shownTheme);
+  const at = themes.findIndex(t => t.id === mapFocus);
   strip.innerHTML = `<button data-step="-1" aria-label="Previous theme">\u2039</button><div class="chips">` +
     `<button data-strip="" aria-pressed="${at < 0}">All</button>` +
-    themes.map(t => `<button data-strip="${t.id}" aria-pressed="${t.id === shownTheme}"><span class="dot"
+    themes.map(t => `<button data-strip="${t.id}" aria-pressed="${t.id === mapFocus}"><span class="dot"
       style="background:${themeSlot(t.name)}"></span>${esc(t.name)}</button>`).join("") +
     `</div><button data-step="1" aria-label="Next theme">\u203a</button>`;
   strip.querySelectorAll("[data-strip]").forEach(b => b.addEventListener("click", () => goTheme(b.dataset.strip)));
@@ -1226,11 +1228,11 @@ function renderStrip() {
 function goTheme(themeId) {
   if (themeId) { showTheme(themeId); return; }
   renderThemes();
-  zoomTo(state.graph.nodes.filter(n => n.x != null));
+  zoomTo(state.graph.nodes.filter(n => mapDrawn.has(n.id) && n.x != null));
 }
 function stepTheme(by) {   // All sits before the first theme and after the last
   const themes = state.graph.themes.filter(t => !t.rejected);
-  const at = themes.findIndex(t => t.id === shownTheme), next = at < 0 ? (by > 0 ? 0 : themes.length - 1) : at + by;
+  const at = themes.findIndex(t => t.id === mapFocus), next = at < 0 ? (by > 0 ? 0 : themes.length - 1) : at + by;
   goTheme(next < 0 || next >= themes.length ? "" : themes[next].id);
 }
 // On a phone the strip would sit under the sheet, so the sheet's title bar steps instead.
@@ -1481,6 +1483,10 @@ const crossLink = l => {
 
 let mapMode = ["territories", "grid"].includes(store.get("mapmode")) ? store.get("mapmode") : "graph";
 let mapNodes = null, drawn = false, shown = null, shownTheme = null, fromTheme = null;
+// A theme picked on the map (the strip, the Themes list, a theme chip) redraws the map with only its ideas, laid out
+// afresh to fill the screen, so a dense lattice can be picked apart theme by theme. All brings the whole map back.
+let mapFocus = null, mapDrawn = new Set(), mapGhosts = new Set(), mapSparse = false;
+let linksOut = store.get("linksout") === "1";   // with a theme, also the ideas outside it that its ideas link to
 let mapZoom = null, mapSvg = null, mapBox = null, mapLabels = null, mapEdges = null;   // to zoom to a theme's ideas
 const placed = new Map();   // where each idea was last drawn, so a redraw doesn't scatter the map
 let view = null;            // the zoom, kept across redraws
@@ -1495,7 +1501,29 @@ function drawMap() {
   if (drawn || !state) return;
   drawn = true;
   if (mapMode === "grid") { drawGrid(); return; }
-  const {nodes, links, themes} = state.graph;
+  const {themes} = state.graph;
+  // What's drawn: the View's ideas (time range, starred), and with a theme picked only that theme's, plus, if asked,
+  // the ideas they link to outside it (drawn faint). The rest isn't dimmed, it's gone, and the layout starts over.
+  const focusT = themes.find(t => t.id === mapFocus);
+  if (mapFocus && !focusT) mapFocus = null;
+  const members = new Set(state.graph.nodes.filter(n => inView(n) && (!focusT || n.themes.includes(focusT.name))).map(n => n.id));
+  const ghosts = new Set();
+  if (focusT && linksOut) {
+    const ok = new Set(state.graph.nodes.filter(inView).map(n => n.id));
+    for (const l of state.graph.links) {
+      const [a, b] = [id(l.source), id(l.target)];
+      if (members.has(a) && !members.has(b) && ok.has(b)) ghosts.add(b);
+      if (members.has(b) && !members.has(a) && ok.has(a)) ghosts.add(a);
+    }
+  }
+  const nodes = state.graph.nodes.filter(n => members.has(n.id) || ghosts.has(n.id));
+  const links = state.graph.links.filter(l => members.has(id(l.source)) || members.has(id(l.target)))
+    .filter(l => nodes.some(n => n.id === id(l.source)) && nodes.some(n => n.id === id(l.target)))
+    .map(l => ({...l, source: id(l.source), target: id(l.target)}));
+  const sparse = !!focusT || viewActive();
+  mapDrawn = new Set(nodes.map(n => n.id));
+  mapSparse = sparse;
+  mapGhosts = ghosts;
   const order = themes.map(t => t.name);
   const slot = themeSlot, color = themeColor;
   const territories = mapMode === "territories";
@@ -1517,13 +1545,20 @@ function drawMap() {
   // Starred ideas are always named, and new ones too while there are few enough to read.
   const fresh = nodes.filter(isNew);
   nodes.forEach(n => { if (n.starred || (fresh.length <= 12 && isNew(n))) labelled.add(n.id); });
-  if (viewActive()) {   // a narrowed view names what's in it, if that's few enough to read
-    const lit = nodes.filter(inView);
+  if (sparse) {   // a narrowed map names what's in it, if that's few enough to read
+    const lit = nodes.filter(n => members.has(n.id));
     labelled.clear();
-    [...lit].sort((a, b) => degree[b.id] - degree[a.id]).slice(0, 20).forEach(n => labelled.add(n.id));
+    [...lit].sort((a, b) => degree[b.id] - degree[a.id]).slice(0, focusT ? 40 : 20).forEach(n => labelled.add(n.id));
   }
 
   const box = document.getElementById("graph");
+  if (!nodes.length) {
+    box.insertAdjacentHTML("beforeend", `<p class="intro" style="padding:56px 16px">${focusT
+      ? `Nothing in ${esc(focusT.name)} in this view.` : "Nothing in this view."}</p>`);
+    mapNodes = mapLabels = mapEdges = null;
+    renderStrip(true);
+    return;
+  }
   const W = box.clientWidth, H = box.clientHeight;
   const svg = d3.select(box).append("svg").attr("width", W).attr("height", H)
     .attr("role", "img").attr("aria-label", "Map of ideas and their connections");
@@ -1531,7 +1566,7 @@ function drawMap() {
     .attr("refY", 5).attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
     .append("path").attr("d", "M0,0L10,5L0,10z").attr("fill", css("--edge-strong"));
   const g = svg.append("g");
-  const zoom = d3.zoom().scaleExtent([0.2, 4]).on("zoom", e => { view = e.transform; g.attr("transform", e.transform); });
+  const zoom = d3.zoom().scaleExtent([0.2, 4]).on("zoom", e => { if (!sparse) view = e.transform; g.attr("transform", e.transform); });
   [mapZoom, mapSvg, mapBox] = [zoom, svg, {W, H}];
   svg.call(zoom);
 
@@ -1545,7 +1580,7 @@ function drawMap() {
     .attr("r", n => radius(n) + 4).attr("fill", "none").style("stroke", "var(--text-primary)")
     .attr("stroke-width", 1.5).attr("stroke-dasharray", "3 2");
   const node = g.append("g").selectAll("circle").data(nodes).join("circle")
-    .attr("r", radius)
+    .attr("r", n => ghosts.has(n.id) ? radius(n) * 0.7 : radius(n))
     .style("fill", n => n.origin === "archive" ? "var(--surface-1)" : color(n))
     .style("stroke", n => n.origin === "archive" ? color(n) : "var(--surface-1)")
     .attr("stroke-width", n => n.origin === "archive" ? 2.5 : 2)
@@ -1568,7 +1603,17 @@ function drawMap() {
   const R = Math.min(W, H) * 0.42, Rx = W * 0.42, Ry = H * 0.42;   // semantic positions fill the box
   const semantic = nodes.filter(n => n.pos).length >= nodes.length / 2;
   let home;
-  if (semantic) {
+  if (semantic && sparse) {
+    // Spread just these ideas over the whole box by rank on each axis: what's left and right, above and below of
+    // what stays, but a tight knot of close ideas is pulled apart as far as a loose one.
+    const ps = nodes.filter(n => n.pos), rank = new Map();
+    for (const i of [0, 1]) {
+      const sorted = [...ps].sort((a, b) => a.pos[i] - b.pos[i]);
+      sorted.forEach((n, r) => { const v = sorted.length > 1 ? 2 * r / (sorted.length - 1) - 1 : 0;
+                                 rank.set(n.id, i ? [rank.get(n.id)[0], v] : [v]); });
+    }
+    home = n => { const r = rank.get(n.id); return r ? [W / 2 + Rx * r[0], H / 2 + Ry * r[1]] : [W / 2, H / 2]; };
+  } else if (semantic) {
     const centre = {};
     for (const name of order) {
       const ps = nodes.filter(n => n.pos && n.themes.includes(name)).map(n => n.pos);
@@ -1582,27 +1627,31 @@ function drawMap() {
               H / 2 + R * 0.85 * Math.sin(2 * Math.PI * i / order.length - Math.PI / 2)]]));
     home = n => { const t = order.find(name => n.themes.includes(name)); return t ? anchor[t] : [W / 2, H / 2]; };
   }
-  nodes.forEach(n => { [n.x, n.y] = placed.get(n.id) || home(n); });
+  nodes.forEach(n => { [n.x, n.y] = (!sparse && placed.get(n.id)) || home(n); });
   const pull = semantic ? 0.3 : 0.12;
   const sim = d3.forceSimulation(nodes)
     .force("link", d3.forceLink(links).id(n => n.id).distance(l => l.kind === "related" ? 70 : 50)
       .strength(semantic ? 0.05 : 0.3))
-    .force("charge", d3.forceManyBody().strength(semantic ? -20 : -45))
+    .force("charge", d3.forceManyBody().strength(sparse ? -60 : semantic ? -20 : -45))
     .force("x", d3.forceX(n => home(n)[0]).strength(pull)).force("y", d3.forceY(n => home(n)[1]).strength(pull))
-    .force("collide", d3.forceCollide(n => radius(n) + 2))
+    .force("collide", d3.forceCollide(n => radius(n) + (sparse ? 8 : 2)))
+    .force("labels", sparse && titles ? labelsApart(nodes.filter(n => labelled.has(n.id))) : null)
     .stop();
   const place = () => {
     edge.attr("x1", l => l.source.x).attr("y1", l => l.source.y).attr("x2", l => l.target.x).attr("y2", l => l.target.y);
     node.attr("cx", n => n.x).attr("cy", n => n.y);
     ring.attr("cx", n => n.x).attr("cy", n => n.y);
     label.attr("x", n => n.x).attr("y", n => n.y);
-    nodes.forEach(n => placed.set(n.id, [n.x, n.y]));
+    if (!sparse) nodes.forEach(n => placed.set(n.id, [n.x, n.y]));   // a theme's own layout isn't the whole map's
   };
   sim.tick(300);   // settle before the first paint, so the map doesn't jiggle into place
   place();
   let shownLabels = label;
   if (territories) shownLabels = drawTerritories(g, nodes, order, {edge, node, label});
-  if (view) svg.call(zoom.transform, view);
+  if (sparse) {
+    const fit = () => zoomTo(nodes, 0);
+    fit(); setTimeout(fit, 350);   // again once a phone's sheet has settled
+  } else if (view) svg.call(zoom.transform, view);
   else {
     // Start zoomed to fit every idea: on a phone the layout is wider than the screen.
     const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y), pad = 24;
@@ -1615,6 +1664,22 @@ function drawMap() {
   mapLabels = shownLabels;
   mapEdges = edge;
   filter();
+}
+
+// A force that pushes named ideas apart until their titles don't overlap (titles sit to the right of the dot).
+const titleWidth = n => 10 + 6.2 * Math.min(red(n.title).length + (n.starred ? 2 : 0), 60);   // about, at 11px
+function labelsApart(named) {
+  const w = titleWidth, h = 15;
+  return alpha => {
+    for (let i = 0; i < named.length; i++) for (let j = i + 1; j < named.length; j++) {
+      const a = named[i], b = named[j];
+      const dx = (b.x + w(b) / 2) - (a.x + w(a) / 2), dy = b.y - a.y;
+      const ox = (w(a) + w(b)) / 2 - Math.abs(dx), oy = h - Math.abs(dy);
+      if (ox <= 0 || oy <= 0) continue;
+      const push = Math.min(oy, 6) * alpha * (dy < 0 ? -1 : 1);   // apart vertically: titles are long and flat
+      a.vy -= push; b.vy += push;
+    }
+  };
 }
 
 // Territories: the same places as the graph, read as a map. Every spot near an idea takes the color of the
@@ -1783,7 +1848,9 @@ const LEVELS = ["peek", "half", "full"];
 const sheetLevel = () => document.getElementById("panel").dataset.sheet;
 function sheet(level) {
   const panel = document.getElementById("panel");
+  const was = panel.dataset.sheet;
   panel.dataset.sheet = level;
+  if (was !== level && mapSparse && mapNodes) setTimeout(() => zoomTo(mapNodes.data()), 0);   // room changed
   const size = document.getElementById("sheetsize");
   size.textContent = level === "full" ? "\u2921" : "\u2922";
   size.setAttribute("aria-label", level === "full" ? "Shrink" : "Expand");
@@ -1812,6 +1879,7 @@ document.getElementById("sheetclose").addEventListener("click", () => sheet("pee
 // The panel with nothing selected: themes, with Pin / Reject for the proposals.
 function renderThemes() {
   shown = shownTheme = fromTheme = null;
+  if (mapFocus) { mapFocus = null; redrawMap(); }
   filter();
   document.getElementById("sheettitle").textContent = "Themes";
   document.getElementById("panelbody").innerHTML =
@@ -1819,7 +1887,7 @@ function renderThemes() {
      captured from conversation. Size grows with evidence and a star; a dashed ring marks what's new since your
      last visit.</p><h2>Themes</h2>` +
     state.graph.themes.map(t => `<div class="theme-row" data-id="${t.id}" role="button" tabindex="0"
-        aria-label="Open ${esc(t.name)}"><span class="name">${esc(t.name)}
+        aria-label="Open ${esc(t.name)}"><span class="name"><span class="dot" style="background:${themeSlot(t.name)}"></span>${esc(t.name)}
         <span class="muted">· ${t.ideas}${t.rejected ? " · rejected (next run)" : t.pinned ? (t.proposed ? " · pinned" : "")
           : t.proposed ? " · proposed" : ""}</span></span>` +
       (t.proposed && !t.pinned && !t.rejected ? `<button data-act="pin_theme">Pin</button><button data-act="reject_theme">Reject</button>` : "") +
@@ -1867,6 +1935,8 @@ function showTheme(themeId) {
     (t.description ? `<p class="statement">${esc(t.description)}</p>` : "") +
     `<p class="meta">${ideas.length} idea${ideas.length === 1 ? "" : "s"}${status ? ` · ${status}` : ""}` +
       (ideas.length > 1 ? ` · ${draftLink(`my Lattice theme "${t.name}"`)}` : "") + `</p>` +
+    (mapMode === "grid" ? "" : `<label class="linksout"><input type="checkbox" id="linksout"${linksOut ? " checked" : ""}>
+      On the map, also show the ideas it links to outside the theme</label>`) +
     ideas.map(n => `<div class="ev"><button class="linkbtn idea-link" data-go="${n.id}">${n.starred ? "★ " : ""}${esc(n.title)}</button>` +
       `<div class="by">${n.score != null ? `score ${n.score.toFixed(2)} · ` : ""}${n.evidence ? `${n.evidence} evidence · ` : ""}` +
       `${n.origin === "archive" ? "archive" : n.origin === "mine" ? "added by you" : day(n.last_said)}${isNew(n) ? " \u00b7 new" : ""}` +
@@ -1880,8 +1950,12 @@ function showTheme(themeId) {
   body.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => show(b.dataset.go, themeId)));
   themeTools(t, ideas);
   bindSensitivity(body, "themes", t.id, () => showTheme(t.id));
+  body.querySelector("#linksout")?.addEventListener("change", e => {
+    linksOut = e.target.checked; store.set("linksout", linksOut ? "1" : "0"); redrawMap();
+  });
   filter();
-  zoomTo(ideas);
+  if (mapFocus !== themeId || !drawn) { mapFocus = themeId; redrawMap(); }   // fits the map to the theme
+  else zoomTo(state.graph.nodes.filter(n => mapDrawn.has(n.id)));
 }
 
 // Rename, merge into another theme, or split some ideas off into a new theme of mine.
@@ -1938,7 +2012,7 @@ function themeTools(t, ideas) {
 }
 
 // Fit the map to some ideas, leaving room for the sheet on a phone.
-function zoomTo(nodes) {
+function zoomTo(nodes, ms = 400) {
   if (!mapZoom || !nodes.length || nodes.some(n => n.x == null)) return;
   const {W, H} = mapBox, pad = 40;
   // The sheet may still be sliding, so go by the height it's heading for (CSS: 55dvh half, 52px peek).
@@ -1946,9 +2020,12 @@ function zoomTo(nodes) {
   const covered = !phone ? 0 : sheetLevel() === "half" ? innerHeight * 0.55 : sheetLevel() === "full" ? H : 52;
   const h = Math.max(120, H - covered);
   const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
-  const [x0, x1, y0, y1] = [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...ys) - pad, Math.max(...ys) + pad];
+  // Leave room for the titles shown, to the right of their dots (when there are few enough to fit).
+  const named = titles && mapLabels ? new Set(mapLabels.data().map(n => n.id)) : new Set();
+  const right = mapSparse ? nodes.map(n => n.x + (named.has(n.id) ? titleWidth(n) : 0)) : xs;
+  const [x0, x1, y0, y1] = [Math.min(...xs) - pad, Math.max(...right) + pad, Math.min(...ys) - pad, Math.max(...ys) + pad];
   const k = Math.min(2.5, W / (x1 - x0), h / (y1 - y0));
-  mapSvg.transition().duration(400).call(mapZoom.transform,
+  mapSvg.transition().duration(ms).call(mapZoom.transform,
     d3.zoomIdentity.translate(W / 2 - k * (x0 + x1) / 2, h / 2 - k * (y0 + y1) / 2).scale(k));
 }
 
@@ -1957,6 +2034,8 @@ function show(ideaId, viaTheme) {
   if (!d) { renderThemes(); return; }
   if (viaTheme !== undefined) fromTheme = viaTheme;
   else if (shown !== ideaId) fromTheme = null;   // reached from the map or the list, not from a theme
+  if (mapFocus && drawn && !mapDrawn.has(ideaId)) { mapFocus = null; redrawMap(); }   // not on the theme's map
+  else if (mapFocus && viaTheme === undefined && !mapGhosts.has(ideaId)) fromTheme = mapFocus;
   shown = ideaId;
   shownTheme = null;
   const backTo = state.graph.themes.find(t => t.id === fromTheme);

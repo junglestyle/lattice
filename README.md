@@ -52,8 +52,12 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   (`vocab_add` / `vocab_remove`; `pub.vocab`). Idea Machine writes the approved list to the `vocab.json` Hearsay reads,
   and you commit it on Hearsay's Words page.
 - **View**: a time range (all, 90, 30 or 7 days: by when an idea was said, or made if you added it) and starred only,
-  for the map, Time and List; and idea titles on or off on the map. A strip over the map steps through the themes
-  (on a phone, ‹ › in the sheet's title bar).
+  for the map, Time and List; and idea titles on or off on the map. The map draws only what's in the View, laid out
+  afresh to fill the screen.
+- **Theme by theme** on the map: picking a theme (the strip over the map, the Themes list, or a theme chip) redraws
+  the map with only that theme's ideas, spread out and named, so a dense lattice can be picked apart. Optionally the
+  ideas it links to outside the theme come along, faint. ‹ › step to the next theme (on a phone, in the sheet's title
+  bar); All brings the whole map back.
 - **Week** (in the Time tab): Idea Machine's weekly digest (`pub.digests`): a summary, then points (what keeps
   coming up, what converges, sleepers, projects forming, what a stranger would value), each with its ideas as chips
   that open the map, and ★ Worth it / Not useful (`digest_star` / `digest_dismiss`). A dot on the tab marks a new one.
