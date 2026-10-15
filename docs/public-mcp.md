@@ -89,6 +89,13 @@ Claude Code doesn't use this. It connects to the tailnet endpoint with the token
 5. **Deploy, then connect** as below. As admin, `git pull` in both clones (`/mnt/fast/repos/ideamachine` and
    `/mnt/fast/repos/lattice`), then run `sudo /mnt/fast/repos/ideamachine/install/nas.sh`. The tunnel should show
    **Healthy** in Cloudflare. Logs go to journald: `journalctl -t lattice` and `journalctl -t lattice-tunnel`.
+   To check the listener from the NAS, say the request came from Anthropic's range, as Cloudflare would:
+
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'CF-Connecting-IP: 160.79.104.10' http://127.0.0.1:8791/mcp   # 401
+   ```
+
+   Without that header it answers an empty 404, as it does to anything not from Anthropic's range.
 
 ## Add or re-add a connector
 
