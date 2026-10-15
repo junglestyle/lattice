@@ -44,10 +44,11 @@ Claude Code doesn't use this. It connects to the tailnet endpoint with the token
 
 ## Set it up (on the NAS)
 
-1. **The public URL.** Pick a hostname on a domain you have on Cloudflare, and add it to Lattice's env file:
+1. **The public URL.** Pick a hostname on a domain you have on Cloudflare, and add it to Lattice's env file
+   (Idea Machine's data and config live in `/mnt/fast/ideamachine`):
 
    ```sh
-   echo "LATTICE_PUBLIC_URL=https://lattice-mcp.<your domain>" >> /mnt/storage/ideamachine/config/lattice.env
+   echo "LATTICE_PUBLIC_URL=https://lattice-mcp.<your domain>" >> /mnt/fast/ideamachine/config/lattice.env
    ```
 
 2. **The tunnel's token.** Idea Machine's `install/compose.yaml` already has the tunnel (`cloudflared`, profile
@@ -56,8 +57,8 @@ Claude Code doesn't use this. It connects to the tailnet endpoint with the token
    It only needs the token from step 3, in `config/cloudflared.env` (it asks for it if it's missing):
 
    ```sh
-   echo "TUNNEL_TOKEN=<the tunnel's token>" > /mnt/storage/ideamachine/config/cloudflared.env
-   chmod 600 /mnt/storage/ideamachine/config/cloudflared.env
+   echo "TUNNEL_TOKEN=<the tunnel's token>" > /mnt/fast/ideamachine/config/cloudflared.env
+   chmod 600 /mnt/fast/ideamachine/config/cloudflared.env
    ```
 
 3. **The tunnel** (Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared).
@@ -85,8 +86,9 @@ Claude Code doesn't use this. It connects to the tailnet endpoint with the token
    If Bot Fight Mode or a managed challenge is on for the domain, skip it for this hostname: Claude's servers
    can't solve a challenge.
 
-5. **Deploy, then connect** as below: `git pull` in both clones on the NAS, then re-run `install/nas.sh`. The
-   tunnel should show **Healthy** in Cloudflare.
+5. **Deploy, then connect** as below. As admin, `git pull` in both clones (`/mnt/fast/repos/ideamachine` and
+   `/mnt/fast/repos/lattice`), then run `sudo /mnt/fast/repos/ideamachine/install/nas.sh`. The tunnel should show
+   **Healthy** in Cloudflare. Logs go to journald: `journalctl -t lattice` and `journalctl -t lattice-tunnel`.
 
 ## Add or re-add a connector
 
@@ -113,10 +115,10 @@ own Hide it / Show it marks decide. Its sign-in page says "demo connector", and 
 
 Which tagged categories it hides is the server's setting, since the app's choices live on your phone. The default is
 `sex,gender_politics,political_extremism,violence,racism`; to change it, add a line to `lattice.env` and re-run
-`install/nas.sh`:
+`sudo /mnt/fast/repos/ideamachine/install/nas.sh`:
 
 ```sh
-echo "LATTICE_DEMO_HIDE=sex,gender_politics,political_extremism,violence,racism,profanity" >> /mnt/storage/ideamachine/config/lattice.env
+echo "LATTICE_DEMO_HIDE=sex,gender_politics,political_extremism,violence,racism,profanity" >> /mnt/fast/ideamachine/config/lattice.env
 ```
 
 Before a demo: in a claude.ai chat, turn the demo connector on and the full one off (the connectors menu in the chat),
@@ -125,5 +127,5 @@ or Cloudflare blocks the demo connector.
 
 ## Turn it off
 
-Remove `LATTICE_PUBLIC_URL` from `lattice.env` and re-run `install/nas.sh`: Lattice no longer opens the listener,
+Remove `LATTICE_PUBLIC_URL` from `lattice.env` and re-run `sudo /mnt/fast/repos/ideamachine/install/nas.sh`: Lattice no longer opens the listener,
 and the tunnel container is removed. Then delete the tunnel in Cloudflare and the connector in claude.ai.

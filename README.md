@@ -108,7 +108,28 @@ Don't bind it to the LAN or the internet: evidence quotes include other people's
 MCP endpoint alone, published for claude.ai and the phone app through a Cloudflare Tunnel, behind OAuth and
 Anthropic's address range ([docs/public-mcp.md](docs/public-mcp.md)), and only if you set it up.
 
-## Always on
+## On the NAS
+
+This is where Lattice runs for real, next to Idea Machine on the NAS's NVMe pool. Idea Machine's
+`install/compose.yaml` builds Lattice's image from the clone at `/mnt/fast/repos/lattice` and runs it with
+Idea Machine's database. Both clones are admin-owned; their data and config (`config/lattice.env`,
+`config/cloudflared.env`) are in `/mnt/fast/ideamachine`.
+
+```sh
+# as admin, once
+git clone git@github.com:junglestyle/lattice.git /mnt/fast/repos/lattice
+# to deploy: pull as admin, then run Idea Machine's installer
+git -C /mnt/fast/repos/lattice pull
+git -C /mnt/fast/repos/ideamachine pull
+sudo /mnt/fast/repos/ideamachine/install/nas.sh
+```
+
+It listens on 127.0.0.1:8790, and `tailscale serve` puts it on the tailnet on port 8444
+(`https://<host>.ts.net:8444/`). The public MCP listener, if you set it up, is 127.0.0.1:8791 behind the
+Cloudflare Tunnel ([docs/public-mcp.md](docs/public-mcp.md)). The containers log to journald:
+`journalctl -t lattice` and `journalctl -t lattice-tunnel`.
+
+## Always on (a workstation)
 
 `systemd/install.sh` runs `lattice serve` as a user service on localhost:8790. It reads `.env`, which holds only
 `LATTICE_DATABASE_URL`, and the service restarts after code changes only when you restart it. The script then puts
