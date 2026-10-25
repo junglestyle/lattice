@@ -115,6 +115,7 @@ def test_the_whole_sign_in_then_tools(public):
     assert status == 400 and json.loads(body)["error"] == "invalid_grant"
 
 
+@pytest.mark.skipif("LATTICE_DATABASE_URL" not in os.environ, reason="needs LATTICE_DATABASE_URL")
 def test_a_read_only_grant_has_no_write_tools(public):
     t = sign_in(public, writes=False)
     assert t["scope"] == "lattice:read"
