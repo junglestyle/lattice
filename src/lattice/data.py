@@ -227,15 +227,11 @@ def vocab(conn) -> list[dict]:
 
 def sensitivity(conn) -> dict:
     """What demo mode hides (pub.sensitivity): ideas and themes Claude tagged or I marked, with categories and who
-    decided. {"ideas": {id: {...}}, "themes": {id: {...}}}; nothing tagged until Idea Machine publishes it."""
+    decided. {"ideas": {id: {...}}, "themes": {id: {...}}}. Without the view this raises: demo mode fails closed."""
     out: dict = {"ideas": {}, "themes": {}}
-    try:
-        for kind, i, sensitive, cats, by in conn.execute(
-                "SELECT kind, id, sensitive, categories, by FROM pub.sensitivity"):
-            out["ideas" if kind == "idea" else "themes"][str(i)] = {"sensitive": sensitive, "categories": list(cats or []),
-                                                                   "by": by}
-    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        pass
+    for kind, i, sensitive, cats, by in conn.execute("SELECT kind, id, sensitive, categories, by FROM pub.sensitivity"):
+        out["ideas" if kind == "idea" else "themes"][str(i)] = {"sensitive": sensitive, "categories": list(cats or []),
+                                                               "by": by}
     return out
 
 

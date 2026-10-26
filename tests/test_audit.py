@@ -354,6 +354,9 @@ def test_the_demo_view_holds_back_and_blacks_out(monkeypatch, admin):
     assert gender not in {t["name"] for t in listed} and listed
     assert use("get_idea", idea_id=hidden[0])["result"]["isError"]
     assert use("open_theme", theme=gender)["result"]["isError"]
+    best = use("best_ideas", theme=gender)["result"]
+    assert best.get("isError") or not best["structuredContent"]["ideas"]
+    assert gender not in json.dumps(best)
     text = json.dumps([use("search_ideas", query=w)["result"] for w in ("the", "a", "is")])
     assert not any(i in text for i in hidden)
     other = next(t for t in listed if t["ideas"] > 1)["name"]

@@ -656,7 +656,7 @@ class _Withheld:
         """Asking for a withheld idea or theme gets the answer a missing one would."""
         if args.get("idea_id") is not None and str(args["idea_id"]) in self.ideas:
             raise ToolError("no such idea (it may have been forgotten)")
-        if name in ("open_theme", "draft_material") and args.get("theme") is not None:
+        if name in ("open_theme", "draft_material", "best_ideas") and args.get("theme") is not None:
             if _theme(conn, args["theme"])[0] in self.themes:
                 raise ToolError(f"no theme matches {args['theme']!r}; list_themes shows them all")
         if any(str(i) in self.ideas for i in args.get("idea_ids") or []):

@@ -332,8 +332,9 @@ def main(argv=None) -> None:
     public = auth.public_url()   # and on a bad public URL or allow list
     if public:
         auth.mcp_allow()
-    with data.connect() as conn:  # and on a bad DSN or missing grants
+    with data.connect() as conn:  # and on a bad DSN or missing grants, demo mode's included
         conn.execute("SELECT 1 FROM pub.ideas LIMIT 1")
+        conn.execute("SELECT 1 FROM pub.sensitivity LIMIT 1")
     if public:
         mcp_server = ThreadingHTTPServer((args.host, args.mcp_port), PublicMcpHandler)
         threading.Thread(target=mcp_server.serve_forever, daemon=True).start()
