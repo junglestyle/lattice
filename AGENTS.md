@@ -11,4 +11,4 @@ Read before changing behavior:
 Docs change with behavior. Never commit hostnames, tokens, or deployment config (see
 [Privacy](docs/standards.md#privacy)).
 
-`make check` runs everything CI runs.
+`make check` runs everything CI runs, except the org standards check: `make standards` (needs the network).
