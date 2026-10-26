@@ -287,6 +287,7 @@ def test_lattice_embeds_as_idea_machine_does(admin):
 def test_ideas_like_this(url):
     near = json.loads(request(url + "/api/near?q=leading+a+partner+in+dance", login(url))[2])
     assert set(near) >= {"available", "ideas"}
+    assert request(url + "/api/near?q=dance&k=many", login(url))[0] == 400
     snap = json.loads(request(url + "/api/snapshot", login(url))[2])
     assert isinstance(snap["neighbours"], dict)
     assert tool(url, "similar_ideas")["isError"] and tool(url, "similar_ideas", idea_id="x", text="y")["isError"]

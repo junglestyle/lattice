@@ -51,7 +51,7 @@ def test_feedback_is_checked_then_appended(url, admin):
     assert post(url + "/api/feedback", None, {"kind": "star", "idea_id": str(uuid.uuid4())})[0] == 401
     assert post(url + "/api/feedback", cookie, {"kind": "star"}, "application/x-www-form-urlencoded")[0] == 415
     for bad in [{"kind": "drop_table"}, {"kind": "star", "idea_id": "1; select"}, {"kind": "item_keep"},
-                {"kind": "pin_theme", "idea_id": str(uuid.uuid4())}]:
+                {"kind": "pin_theme", "idea_id": str(uuid.uuid4())}, ["star"], "star"]:
         assert post(url + "/api/feedback", cookie, bad)[0] == 400, bad
     (idea,) = admin.execute("SELECT idea_id FROM pub.ideas LIMIT 1").fetchone()
     status, body = post(url + "/api/feedback", cookie, {"kind": "star", "idea_id": str(idea)})
