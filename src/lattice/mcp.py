@@ -1,7 +1,8 @@
 """Talk to it: an MCP server over pub (Idea Machine's ROADMAP, Phase 2 slice 7).
 
-Streamable HTTP at /mcp, answering each JSON-RPC request with plain JSON (no SSE stream, no sessions). It's behind
-the Lattice token as a bearer header and reachable only on the tailnet, like the rest of Lattice.
+Streamable HTTP at /mcp, answering each JSON-RPC request with plain JSON (no SSE stream, no sessions). On the
+tailnet it's behind the Lattice token as a bearer header. It's the one part of Lattice also served beyond the
+tailnet: the public listener, behind OAuth and Anthropic's address range (docs/public-mcp.md).
 
 What leaves through it follows Idea Machine's privacy policy B: quotes go out, but speakers are pseudonymized per
 answer ("me", "unknown", then S1, S2... in order of first appearance). Flags made here (star, link, note) are
