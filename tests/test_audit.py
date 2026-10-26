@@ -163,20 +163,19 @@ def test_adding_an_idea(url, admin):
     good = {"kind": "idea_add", "idea_id": new, "title": " Mine ", "statement": "An idea I typed.",
             "note": "From a walk.", "link_to": [str(other), new]}
     status, body = post(url + "/api/feedback", login(url), good)
+    made = [new]
     try:
-        assert status in (201, 503)   # 503 until Idea Machine takes idea_add
-        if status == 201:
-            assert admin.execute("SELECT payload FROM pub.feedback_events WHERE event_id = %s",
-                                 (body["event_id"],)).fetchone()[0] == {
-                "title": "Mine", "statement": "An idea I typed.", "note": "From a walk.", "link_to": [str(other)]}
-            shown = json.loads(request(url + "/api/snapshot", login(url))[2])["ideas"][new]   # at once, not on the run
-            assert (shown["title"], shown["origin"], shown["notes"]) == ("Mine", "mine", "From a walk.")
-            assert post(url + "/api/feedback", login(url), good)[0] == 201   # a resend changes nothing
+        assert status == 201
+        assert admin.execute("SELECT payload FROM pub.feedback_events WHERE event_id = %s",
+                             (body["event_id"],)).fetchone()[0] == {
+            "title": "Mine", "statement": "An idea I typed.", "note": "From a walk.", "link_to": [str(other)]}
+        shown = json.loads(request(url + "/api/snapshot", login(url))[2])["ideas"][new]   # at once, not on the run
+        assert (shown["title"], shown["origin"], shown["notes"]) == ("Mine", "mine", "From a walk.")
+        assert post(url + "/api/feedback", login(url), good)[0] == 201   # a resend changes nothing
         added = tool(url, "add_idea", title="T", statement="S")
-        assert bool(added.get("isError")) == (status == 503)
-        made = [new] + ([added["structuredContent"]["idea_id"]] if status == 201 else [])
+        assert not added.get("isError"), added
+        made.append(added["structuredContent"]["idea_id"])
     finally:
-        made = locals().get("made", [new])
         admin.execute("DELETE FROM pub.feedback_events WHERE idea_id = ANY(%s::uuid[])", (made,))
         admin.execute("DELETE FROM im.ideas WHERE idea_id = ANY(%s::uuid[]) AND origin = 'mine'", (made,))
 

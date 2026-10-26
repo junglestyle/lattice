@@ -1,6 +1,5 @@
 """Which of two ideas is better? (idea_compare events). Against a real Idea Machine database; writing needs
-IM_DEV_ADMIN_URL too, to delete the events. Until Idea Machine adds the kind, a comparison is refused with 503,
-which keeps it in the app's queue."""
+IM_DEV_ADMIN_URL too, to delete the events."""
 
 import json
 import os
@@ -37,8 +36,6 @@ def test_comparisons_are_checked_then_recorded(url, admin):
         assert post(url + "/api/feedback", cookie, bad)[0] == 400, bad
     status, body = post(url + "/api/feedback", cookie, {"kind": "idea_compare", "idea_id": a, "other_idea_id": b,
                                                        "winner": "second", "note": " clearer "})
-    if status == 503:
-        pytest.skip("Idea Machine doesn't accept idea_compare yet (refused with 503, so the app keeps it queued)")
     try:
         assert status == 201
         assert admin.execute("SELECT idea_id::text, other_idea_id::text, payload FROM pub.feedback_events "
@@ -63,11 +60,9 @@ def test_comparing_in_conversation(url, admin):
     try:
         result = tool(url, "record_comparison", first_idea_id=asked["first"]["id"],
                       second_idea_id=asked["second"]["id"], winner="first")
-        if result.get("isError"):
-            assert "doesn't accept" in result["content"][0]["text"]
-        else:
-            assert admin.execute("SELECT kind, source FROM pub.feedback_events WHERE event_id > %s",
-                                 (before,)).fetchall() == [("idea_compare", "mcp")]
+        assert not result.get("isError"), result
+        assert admin.execute("SELECT kind, source FROM pub.feedback_events WHERE event_id > %s",
+                             (before,)).fetchall() == [("idea_compare", "mcp")]
     finally:
         admin.execute("DELETE FROM pub.feedback_events WHERE event_id > %s AND kind = 'idea_compare'", (before,))
 
