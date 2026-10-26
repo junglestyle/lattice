@@ -1,4 +1,4 @@
-"""Against a real Idea Machine database: set LATTICE_DATABASE_URL (role lattice_app)."""
+"""The app's login, and against a real Idea Machine database (LATTICE_DATABASE_URL, role lattice_app) what it serves."""
 
 import json
 import os
@@ -12,7 +12,7 @@ import pytest
 
 from lattice import auth, data, server
 
-pytestmark = pytest.mark.skipif("LATTICE_DATABASE_URL" not in os.environ, reason="needs LATTICE_DATABASE_URL")
+needs_db = pytest.mark.skipif("LATTICE_DATABASE_URL" not in os.environ, reason="needs LATTICE_DATABASE_URL")
 TOKEN = "test-token-0123456789abcdef"
 
 
@@ -59,6 +59,7 @@ def test_everything_but_login_and_icons_needs_a_session(url):
     assert request(url + "/apple-touch-icon.png")[2][:8] == b"\x89PNG\r\n\x1a\n"
 
 
+@needs_db
 def test_page_and_snapshot_after_login(url):
     cookie = login(url)
     status, _, page = request(url + "/", cookie)
@@ -78,6 +79,7 @@ def test_a_forged_or_old_cookie_is_refused(url, monkeypatch):
     assert request(url + "/api/snapshot", cookie)[0] == 401
 
 
+@needs_db
 def test_the_role_cannot_read_idea_machines_tables():
     import psycopg
 

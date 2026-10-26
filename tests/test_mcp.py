@@ -1,5 +1,5 @@
-"""The MCP endpoint (slice 7), against a real Idea Machine database (LATTICE_DATABASE_URL). The star test needs
-IM_DEV_ADMIN_URL too, to delete its event."""
+"""The MCP endpoint (slice 7). Past the token, against a real Idea Machine database (LATTICE_DATABASE_URL); the
+star test needs IM_DEV_ADMIN_URL too, to delete its event."""
 
 import json
 import os
@@ -11,7 +11,7 @@ import pytest
 from test_review import admin  # noqa: F401  (a fixture)
 from test_server import TOKEN, url  # noqa: F401  (url is a fixture)
 
-pytestmark = pytest.mark.skipif("LATTICE_DATABASE_URL" not in os.environ, reason="needs LATTICE_DATABASE_URL")
+needs_db = pytest.mark.skipif("LATTICE_DATABASE_URL" not in os.environ, reason="needs LATTICE_DATABASE_URL")
 
 
 def rpc(url, message, token=TOKEN, headers=None):
@@ -40,6 +40,7 @@ def test_it_needs_the_token_and_refuses_browsers(url):
     assert rpc(url, hello)[1] == {"jsonrpc": "2.0", "id": 1, "result": {}}
 
 
+@needs_db
 def test_handshake_and_tools(url):
     status, body = rpc(url, {"jsonrpc": "2.0", "id": 0, "method": "initialize",
                              "params": {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -53,6 +54,7 @@ def test_handshake_and_tools(url):
     assert rpc(url, {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "drop"}})[1]["error"]
 
 
+@needs_db
 def test_reading_the_lattice_never_names_anyone(url, admin):
     names = {n for (n,) in admin.execute("SELECT DISTINCT said_by FROM pub.evidence")} - {"me", "unknown"}
     themes = tool(url, "list_themes")["structuredContent"]["themes"]
@@ -73,6 +75,7 @@ def test_reading_the_lattice_never_names_anyone(url, admin):
     assert "proposed_themes" in tool(url, "whats_new", since="2026-01-01")["structuredContent"]
 
 
+@needs_db
 def test_mistakes_come_back_as_tool_errors(url):
     assert tool(url, "get_idea", idea_id="not-an-id")["isError"]
     assert tool(url, "get_idea", idea_id="00000000-0000-0000-0000-000000000000")["isError"]
@@ -81,6 +84,7 @@ def test_mistakes_come_back_as_tool_errors(url):
     assert tool(url, "whats_new", since="last tuesday")["isError"]
 
 
+@needs_db
 def test_a_star_from_conversation_is_a_feedback_event(url, admin):
     (idea,) = admin.execute("SELECT idea_id FROM pub.ideas WHERE NOT starred LIMIT 1").fetchone()
     before = admin.execute("SELECT coalesce(max(event_id), 0) FROM pub.feedback_events").fetchone()[0]
@@ -94,6 +98,7 @@ def test_a_star_from_conversation_is_a_feedback_event(url, admin):
                       (before, idea))
 
 
+@needs_db
 def test_best_ideas_ranks_by_idea_machines_score(url, admin, monkeypatch):
     from uuid import UUID
 
