@@ -1,7 +1,8 @@
 """Talk to it: an MCP server over pub (Idea Machine's ROADMAP, Phase 2 slice 7).
 
-Streamable HTTP at /mcp, answering each JSON-RPC request with plain JSON (no SSE stream, no sessions). It's behind
-the Lattice token as a bearer header and reachable only on the tailnet, like the rest of Lattice.
+Streamable HTTP at /mcp, answering each JSON-RPC request with plain JSON (no SSE stream, no sessions). On the
+tailnet it's behind the Lattice token as a bearer header. It's the one part of Lattice also served beyond the
+tailnet: the public listener, behind OAuth and Anthropic's address range (docs/public-mcp.md).
 
 What leaves through it follows Idea Machine's privacy policy B: quotes go out, but speakers are pseudonymized per
 answer ("me", "unknown", then S1, S2... in order of first appearance). Flags made here (star, link, note) are
@@ -656,7 +657,7 @@ class _Withheld:
         """Asking for a withheld idea or theme gets the answer a missing one would."""
         if args.get("idea_id") is not None and str(args["idea_id"]) in self.ideas:
             raise ToolError("no such idea (it may have been forgotten)")
-        if name in ("open_theme", "draft_material") and args.get("theme") is not None:
+        if name in ("open_theme", "draft_material", "best_ideas") and args.get("theme") is not None:
             if _theme(conn, args["theme"])[0] in self.themes:
                 raise ToolError(f"no theme matches {args['theme']!r}; list_themes shows them all")
         if any(str(i) in self.ideas for i in args.get("idea_ids") or []):

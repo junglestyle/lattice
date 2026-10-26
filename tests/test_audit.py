@@ -39,7 +39,7 @@ def test_the_snapshot_names_the_spot_checks(url):
 
 @needs_db
 def test_bulk_keeps_and_spot_checks_are_flagged(url, admin):
-    review = json.loads(request(url + "/api/review", login(url))[2])
+    review = json.loads(request(url + "/api/snapshot", login(url))[2])["review"]
     rest = [i["id"] for i in review["items"] if i["id"] not in review["audit"]]
     if not rest:
         pytest.skip("no more than the spot checks waiting in this database")
@@ -163,20 +163,19 @@ def test_adding_an_idea(url, admin):
     good = {"kind": "idea_add", "idea_id": new, "title": " Mine ", "statement": "An idea I typed.",
             "note": "From a walk.", "link_to": [str(other), new]}
     status, body = post(url + "/api/feedback", login(url), good)
+    made = [new]
     try:
-        assert status in (201, 503)   # 503 until Idea Machine takes idea_add
-        if status == 201:
-            assert admin.execute("SELECT payload FROM pub.feedback_events WHERE event_id = %s",
-                                 (body["event_id"],)).fetchone()[0] == {
-                "title": "Mine", "statement": "An idea I typed.", "note": "From a walk.", "link_to": [str(other)]}
-            shown = json.loads(request(url + f"/api/idea/{new}", login(url))[2])   # at once, not on the run
-            assert (shown["title"], shown["origin"], shown["notes"]) == ("Mine", "mine", "From a walk.")
-            assert post(url + "/api/feedback", login(url), good)[0] == 201   # a resend changes nothing
+        assert status == 201
+        assert admin.execute("SELECT payload FROM pub.feedback_events WHERE event_id = %s",
+                             (body["event_id"],)).fetchone()[0] == {
+            "title": "Mine", "statement": "An idea I typed.", "note": "From a walk.", "link_to": [str(other)]}
+        shown = json.loads(request(url + "/api/snapshot", login(url))[2])["ideas"][new]   # at once, not on the run
+        assert (shown["title"], shown["origin"], shown["notes"]) == ("Mine", "mine", "From a walk.")
+        assert post(url + "/api/feedback", login(url), good)[0] == 201   # a resend changes nothing
         added = tool(url, "add_idea", title="T", statement="S")
-        assert bool(added.get("isError")) == (status == 503)
-        made = [new] + ([added["structuredContent"]["idea_id"]] if status == 201 else [])
+        assert not added.get("isError"), added
+        made.append(added["structuredContent"]["idea_id"])
     finally:
-        made = locals().get("made", [new])
         admin.execute("DELETE FROM pub.feedback_events WHERE idea_id = ANY(%s::uuid[])", (made,))
         admin.execute("DELETE FROM im.ideas WHERE idea_id = ANY(%s::uuid[]) AND origin = 'mine'", (made,))
 
@@ -287,6 +286,7 @@ def test_lattice_embeds_as_idea_machine_does(admin):
 def test_ideas_like_this(url):
     near = json.loads(request(url + "/api/near?q=leading+a+partner+in+dance", login(url))[2])
     assert set(near) >= {"available", "ideas"}
+    assert request(url + "/api/near?q=dance&k=many", login(url))[0] == 400
     snap = json.loads(request(url + "/api/snapshot", login(url))[2])
     assert isinstance(snap["neighbours"], dict)
     assert tool(url, "similar_ideas")["isError"] and tool(url, "similar_ideas", idea_id="x", text="y")["isError"]
@@ -354,6 +354,9 @@ def test_the_demo_view_holds_back_and_blacks_out(monkeypatch, admin):
     assert gender not in {t["name"] for t in listed} and listed
     assert use("get_idea", idea_id=hidden[0])["result"]["isError"]
     assert use("open_theme", theme=gender)["result"]["isError"]
+    best = use("best_ideas", theme=gender)["result"]
+    assert best.get("isError") or not best["structuredContent"]["ideas"]
+    assert gender not in json.dumps(best)
     text = json.dumps([use("search_ideas", query=w)["result"] for w in ("the", "a", "is")])
     assert not any(i in text for i in hidden)
     other = next(t for t in listed if t["ideas"] > 1)["name"]

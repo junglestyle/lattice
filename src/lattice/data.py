@@ -41,21 +41,15 @@ def graph(conn) -> dict:
 
 
 def positions(conn) -> dict:
-    """Each idea's place on the semantic map (x, y in about [-1, 1]), once Idea Machine publishes them."""
-    try:
-        return {i: [x, y] for i, x, y in conn.execute("SELECT idea_id, x, y FROM pub.idea_positions")}
-    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        return {}
+    """Each idea's place on the semantic map (x, y in about [-1, 1]); ideas not placed yet are left out."""
+    return {i: [x, y] for i, x, y in conn.execute("SELECT idea_id, x, y FROM pub.idea_positions")}
 
 
 def scores(conn) -> dict:
-    """Each scored idea's ranking from Idea Machine (pub.idea_scores): score 0-1 and the reasons, once it's published.
-    Ideas not scored yet are left out."""
-    try:
-        rows = conn.execute("""SELECT idea_id, score, generality, novelty, compression, outside_value, recurrence, why
-                               FROM pub.idea_scores WHERE score IS NOT NULL""").fetchall()
-    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        return {}
+    """Each scored idea's ranking from Idea Machine (pub.idea_scores): score 0-1 and the reasons. Ideas not scored
+    yet are left out."""
+    rows = conn.execute("""SELECT idea_id, score, generality, novelty, compression, outside_value, recurrence, why
+                           FROM pub.idea_scores WHERE score IS NOT NULL""").fetchall()
     return {i: {"score": float(sc), "generality": g, "novelty": n, "compression": c, "outside_value": o,
                 "recurrence": float(r) if r is not None else None, "why": why}
             for i, sc, g, n, c, o, r, why in rows}
@@ -77,13 +71,11 @@ def idea(conn, idea_id: str) -> dict | None:
 
 def evidence_of(conn, idea_id: str | None = None) -> dict:
     """Evidence by idea: one idea's, or every idea's. `how` is how its verdict was made ('one', 'audit', or 'bulk':
-    kept unread), None before Idea Machine publishes it."""
-    sql = """SELECT idea_id, item_id, kind, said_by, quote, gist, confidence, said_at, verdict, relation, {how}
-             FROM pub.evidence WHERE %(idea)s::uuid IS NULL OR idea_id = %(idea)s ORDER BY said_at"""
-    try:
-        rows = conn.execute(sql.format(how="how"), {"idea": idea_id}).fetchall()
-    except psycopg.errors.UndefinedColumn:
-        rows = conn.execute(sql.format(how="NULL::text"), {"idea": idea_id}).fetchall()
+    kept unread), None without a verdict."""
+    rows = conn.execute("""SELECT idea_id, item_id, kind, said_by, quote, gist, confidence, said_at, verdict, relation,
+                                  how
+                           FROM pub.evidence WHERE %(idea)s::uuid IS NULL OR idea_id = %(idea)s ORDER BY said_at""",
+                        {"idea": idea_id}).fetchall()
     out: dict = {}
     for i, item, k, who, q, g, c, at, v, rel, how in rows:
         out.setdefault(i, []).append({"item_id": str(item), "kind": k, "said_by": who, "quote": q, "gist": g,
@@ -104,12 +96,9 @@ def details(conn) -> dict:
 
 
 def compare_pairs(conn) -> list[dict]:
-    """The pairs Idea Machine most wants my "which is better?" on (pub.compare_pairs), once it publishes them."""
-    try:
-        return [{"first": str(a), "second": str(b), "reason": r}
-                for a, b, r in conn.execute("SELECT idea_id, other_idea_id, reason FROM pub.compare_pairs")]
-    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        return []
+    """The pairs Idea Machine most wants my "which is better?" on (pub.compare_pairs)."""
+    return [{"first": str(a), "second": str(b), "reason": r}
+            for a, b, r in conn.execute("SELECT idea_id, other_idea_id, reason FROM pub.compare_pairs")]
 
 
 def compared(conn) -> list[list[str]]:
@@ -216,26 +205,19 @@ VOCAB_SOURCES = ("correction", "repair", "archive", "added")
 def vocab(conn) -> list[dict]:
     """The words Hearsay boosts when it transcribes (pub.vocab): in the list, suggested, or removed, each with where
     it came from and, for a suggestion, why. Idea Machine writes the approved ones to the vocab.json Hearsay reads."""
-    try:
-        rows = conn.execute("""SELECT term, source, heard_as, status, idea_id, example FROM pub.vocab
-                               ORDER BY status, lower(term)""").fetchall()
-    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        return []
+    rows = conn.execute("""SELECT term, source, heard_as, status, idea_id, example FROM pub.vocab
+                           ORDER BY status, lower(term)""").fetchall()
     return [{"term": t, "source": s, "heard_as": h, "status": st, "idea_id": str(i) if i else None, "example": ex}
             for t, s, h, st, i, ex in rows]
 
 
 def sensitivity(conn) -> dict:
     """What demo mode hides (pub.sensitivity): ideas and themes Claude tagged or I marked, with categories and who
-    decided. {"ideas": {id: {...}}, "themes": {id: {...}}}; nothing tagged until Idea Machine publishes it."""
+    decided. {"ideas": {id: {...}}, "themes": {id: {...}}}. Without the view this raises: demo mode fails closed."""
     out: dict = {"ideas": {}, "themes": {}}
-    try:
-        for kind, i, sensitive, cats, by in conn.execute(
-                "SELECT kind, id, sensitive, categories, by FROM pub.sensitivity"):
-            out["ideas" if kind == "idea" else "themes"][str(i)] = {"sensitive": sensitive, "categories": list(cats or []),
-                                                                   "by": by}
-    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        pass
+    for kind, i, sensitive, cats, by in conn.execute("SELECT kind, id, sensitive, categories, by FROM pub.sensitivity"):
+        out["ideas" if kind == "idea" else "themes"][str(i)] = {"sensitive": sensitive, "categories": list(cats or []),
+                                                               "by": by}
     return out
 
 
@@ -243,13 +225,10 @@ def digests(conn, week: str | None = None) -> list[dict]:
     """Idea Machine's weekly digests (pub.digests, slice 6), newest first; or the one for the week holding `week`
     (an ISO date). Each point: kind, title, body, idea_ids, and mine ('star', 'dismiss' or None). A digest can vanish
     between syncs: forgetting any speech behind it deletes it whole."""
-    try:
-        rows = conn.execute(
-            """SELECT digest_id, week_start, period_start, period_end, summary, written_at, points FROM pub.digests
-               WHERE %(week)s::date IS NULL OR week_start = date_trunc('week', %(week)s::date)::date
-               ORDER BY week_start DESC""", {"week": week}).fetchall()
-    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        return []
+    rows = conn.execute(
+        """SELECT digest_id, week_start, period_start, period_end, summary, written_at, points FROM pub.digests
+           WHERE %(week)s::date IS NULL OR week_start = date_trunc('week', %(week)s::date)::date
+           ORDER BY week_start DESC""", {"week": week}).fetchall()
     return [{"id": i, "week_start": w.isoformat(), "period_start": a.isoformat(), "period_end": b.isoformat(),
              "summary": s, "written_at": at.isoformat(), "points": list(p or [])}
             for i, w, a, b, s, at, p in rows]

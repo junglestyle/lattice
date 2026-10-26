@@ -101,11 +101,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "JSON only"}, 415)
             return
         length = min(int(self.headers.get("Content-Length") or 0), 4096)
+        # A 400 tells the app to drop the event for good, so it's only for an event that is itself wrong.
         try:
             event = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            self._json({"error": "not JSON"}, 400)
+            return
+        if not isinstance(event, dict):
+            self._json({"error": "an event is a JSON object"}, 400)
+            return
+        try:
             with data.connect() as conn:
                 self._json({"event_id": data.record(conn, event)}, 201)
-        except (ValueError, TypeError, AttributeError) as e:
+        except ValueError as e:
             self._json({"error": str(e)}, 400)
         except data.NotYet:
             # A kind Idea Machine's database doesn't take yet: 503, so the app keeps it queued and tries later.
@@ -145,37 +153,30 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/login")
             return
-        try:
-            with data.connect() as conn:
-                if path == "/":
-                    # The page carries no data: it renders the copy kept on the device and syncs it from
-                    # /api/snapshot, so the service worker can keep the page itself for offline use.
-                    self._send(200, HERE.joinpath("index.html").read_bytes(), "text/html; charset=utf-8")
-                elif path == "/api/snapshot":
-                    self._json(data.snapshot(conn))
-                elif path == "/api/graph":
-                    self._json(data.graph(conn))
-                elif path == "/api/review":
-                    self._json(data.review(conn))
-                elif path == "/api/status":
-                    self._json(data.status(conn))
-                elif path == "/api/export":   # the whole lattice as Markdown, mine to keep
-                    self._send(200, export.build(conn), "application/zip",
-                               {"Content-Disposition": f'attachment; filename="lattice-{datetime.date.today()}.zip"'})
-                elif path == "/api/near":   # search by meaning; the app falls back to words without it
-                    q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-                    try:
-                        hits = meaning.near(conn, q.get("q", [""])[0][:1000], int(q.get("k", ["15"])[0]))
-                        self._json({"available": True, "ideas": [{"id": i, "similarity": round(s, 3)} for i, s in hits]})
-                    except meaning.Unavailable as e:
-                        self._json({"available": False, "why": str(e), "ideas": []})
-                elif path.startswith("/api/idea/"):
-                    found = data.idea(conn, path.removeprefix("/api/idea/"))
-                    self._json(found or {"error": "no such idea"}, 200 if found else 404)
-                else:
-                    self._json({"error": "not found"}, 404)
-        except ValueError:
-            self._json({"error": "bad idea id"}, 400)
+        with data.connect() as conn:
+            if path == "/":
+                # The page carries no data: it renders the copy kept on the device and syncs it from
+                # /api/snapshot, so the service worker can keep the page itself for offline use.
+                self._send(200, HERE.joinpath("index.html").read_bytes(), "text/html; charset=utf-8")
+            elif path == "/api/snapshot":
+                self._json(data.snapshot(conn))
+            elif path == "/api/export":   # the whole lattice as Markdown, mine to keep
+                self._send(200, export.build(conn), "application/zip",
+                           {"Content-Disposition": f'attachment; filename="lattice-{datetime.date.today()}.zip"'})
+            elif path == "/api/near":   # search by meaning; the app falls back to words without it
+                q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                try:
+                    k = int(q.get("k", ["15"])[0])
+                except ValueError:
+                    self._json({"error": "k must be a whole number"}, 400)
+                    return
+                try:
+                    hits = meaning.near(conn, q.get("q", [""])[0][:1000], k)
+                    self._json({"available": True, "ideas": [{"id": i, "similarity": round(s, 3)} for i, s in hits]})
+                except meaning.Unavailable as e:
+                    self._json({"available": False, "why": str(e), "ideas": []})
+            else:
+                self._json({"error": "not found"}, 404)
 
     def log_message(self, fmt, *args) -> None:  # quieter than the default: no client addresses
         pass
@@ -332,8 +333,9 @@ def main(argv=None) -> None:
     public = auth.public_url()   # and on a bad public URL or allow list
     if public:
         auth.mcp_allow()
-    with data.connect() as conn:  # and on a bad DSN or missing grants
+    with data.connect() as conn:  # and on a bad DSN or missing grants, demo mode's included
         conn.execute("SELECT 1 FROM pub.ideas LIMIT 1")
+        conn.execute("SELECT 1 FROM pub.sensitivity LIMIT 1")
     if public:
         mcp_server = ThreadingHTTPServer((args.host, args.mcp_port), PublicMcpHandler)
         threading.Thread(target=mcp_server.serve_forever, daemon=True).start()

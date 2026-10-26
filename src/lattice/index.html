@@ -800,7 +800,7 @@ function renderBatch() {
 
 // --- Which is better? ---------------------------------------------------------------------------------------
 // Once the captures run out, I can compare ideas two at a time: a steadier signal for Idea Machine's ranking than
-// keep and discard. Idea Machine picks the pairs (pub.compare_pairs) when it publishes them; otherwise two ideas
+// keep and discard. Idea Machine picks the pairs (pub.compare_pairs) when it has some; otherwise two ideas
 // with neighbouring scores, else two sharing a theme. A pair is never asked twice, and the order shown is random.
 
 let comparing = false;
@@ -1069,7 +1069,7 @@ const hit = n => inView(n) && (!onlyNew || isNew(n)) && (!query() || (meaningHit
   : (n.title + " " + n.statement).toLowerCase().includes(query())));
 
 // Search by meaning: the server embeds the words as Idea Machine embeds ideas and returns the closest (/api/near).
-// Online only; without it (offline, or Idea Machine not publishing it yet) the search matches words as before.
+// Online only; without it (offline, or Idea Machine's model differs) the search matches words as before.
 let byMeaning = store.get("meaning") === "1", meaningHits = null, meaningSeq = 0;
 async function searchByMeaning() {
   const q = query(), seq = ++meaningSeq;

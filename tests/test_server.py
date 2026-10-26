@@ -1,4 +1,4 @@
-"""Against a real Idea Machine database: set LATTICE_DATABASE_URL (role lattice_app)."""
+"""The app's login, and against a real Idea Machine database (LATTICE_DATABASE_URL, role lattice_app) what it serves."""
 
 import json
 import os
@@ -12,7 +12,7 @@ import pytest
 
 from lattice import auth, data, server
 
-pytestmark = pytest.mark.skipif("LATTICE_DATABASE_URL" not in os.environ, reason="needs LATTICE_DATABASE_URL")
+needs_db = pytest.mark.skipif("LATTICE_DATABASE_URL" not in os.environ, reason="needs LATTICE_DATABASE_URL")
 TOKEN = "test-token-0123456789abcdef"
 
 
@@ -51,7 +51,7 @@ def login(url):
 
 def test_everything_but_login_and_icons_needs_a_session(url):
     assert request(url + "/")[0:2][0] == 303
-    assert request(url + "/api/graph")[0] == 401
+    assert request(url + "/api/snapshot")[0] == 401
     assert request(url + "/login", form={"token": "wrong"})[0] == 401
     for path in ["/login", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"]:
         assert request(url + path)[0] == 200, path
@@ -59,26 +59,27 @@ def test_everything_but_login_and_icons_needs_a_session(url):
     assert request(url + "/apple-touch-icon.png")[2][:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_page_graph_and_idea_after_login(url):
+@needs_db
+def test_page_and_snapshot_after_login(url):
     cookie = login(url)
     status, _, page = request(url + "/", cookie)
     assert status == 200 and b"<title>Lattice</title>" in page and b'rel="manifest"' in page
-    g = json.loads(request(url + "/api/graph", cookie)[2])
+    snap = json.loads(request(url + "/api/snapshot", cookie)[2])
+    g = snap["graph"]
     ids = {n["id"] for n in g["nodes"]}
     assert g["nodes"] and all(link["source"] in ids and link["target"] in ids for link in g["links"])
-    one = json.loads(request(url + f"/api/idea/{g['nodes'][0]['id']}", cookie)[2])
-    assert one["title"] == g["nodes"][0]["title"]
-    assert request(url + "/api/idea/not-a-uuid", cookie)[0] == 400
-    assert request(url + "/api/idea/00000000-0000-0000-0000-000000000000", cookie)[0] == 404
+    assert snap["ideas"][g["nodes"][0]["id"]]["title"] == g["nodes"][0]["title"] and set(snap["ideas"]) == ids
+    assert request(url + "/api/graph", cookie)[0] == 404
 
 
 def test_a_forged_or_old_cookie_is_refused(url, monkeypatch):
     cookie = login(url)
-    assert request(url + "/api/graph", "lattice_session=" + "0" * 64)[0] == 401
+    assert request(url + "/api/snapshot", "lattice_session=" + "0" * 64)[0] == 401
     monkeypatch.setenv("LATTICE_TOKEN", TOKEN + "-rotated")  # changing the token logs every device out
-    assert request(url + "/api/graph", cookie)[0] == 401
+    assert request(url + "/api/snapshot", cookie)[0] == 401
 
 
+@needs_db
 def test_the_role_cannot_read_idea_machines_tables():
     import psycopg
 
