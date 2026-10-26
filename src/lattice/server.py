@@ -160,12 +160,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, HERE.joinpath("index.html").read_bytes(), "text/html; charset=utf-8")
             elif path == "/api/snapshot":
                 self._json(data.snapshot(conn))
-            elif path == "/api/graph":
-                self._json(data.graph(conn))
-            elif path == "/api/review":
-                self._json(data.review(conn))
-            elif path == "/api/status":
-                self._json(data.status(conn))
             elif path == "/api/export":   # the whole lattice as Markdown, mine to keep
                 self._send(200, export.build(conn), "application/zip",
                            {"Content-Disposition": f'attachment; filename="lattice-{datetime.date.today()}.zip"'})
@@ -181,13 +175,6 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"available": True, "ideas": [{"id": i, "similarity": round(s, 3)} for i, s in hits]})
                 except meaning.Unavailable as e:
                     self._json({"available": False, "why": str(e), "ideas": []})
-            elif path.startswith("/api/idea/"):
-                try:
-                    found = data.idea(conn, path.removeprefix("/api/idea/"))
-                except ValueError:
-                    self._json({"error": "bad idea id"}, 400)
-                    return
-                self._json(found or {"error": "no such idea"}, 200 if found else 404)
             else:
                 self._json({"error": "not found"}, 404)
 

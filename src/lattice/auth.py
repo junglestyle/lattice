@@ -11,8 +11,6 @@ import os
 
 COOKIE = "lattice_session"
 MAX_AGE = 365 * 24 * 3600
-PUBLIC = {"/login", "/logout", "/sw.js", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png",
-          "/apple-touch-icon.png"}
 
 
 def token() -> str:

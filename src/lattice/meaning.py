@@ -21,17 +21,14 @@ MISSING = (psycopg.errors.UndefinedFunction, psycopg.errors.UndefinedTable, psyc
 
 
 class Unavailable(Exception):
-    """Search by meaning can't run: no model here, or Idea Machine doesn't publish it (yet), or its model differs."""
+    """Search by meaning can't run: Idea Machine doesn't publish it (yet), or its model differs."""
 
 
 def _embedder():
     global _model
     with _lock:
         if _model is None:
-            try:
-                from fastembed import TextEmbedding
-            except ImportError:
-                raise Unavailable("search by meaning isn't installed here") from None
+            from fastembed import TextEmbedding
             _model = TextEmbedding(MODEL, cache_dir=os.environ.get("FASTEMBED_CACHE_PATH"))
         return _model
 

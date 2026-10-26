@@ -39,8 +39,8 @@ def admin():
 
 def test_review_queue_has_context(url):
     cookie = login(url)
-    status, _, body = request(url + "/api/review", cookie)
-    review = json.loads(body)
+    status, _, body = request(url + "/api/snapshot", cookie)
+    review = json.loads(body)["review"]
     assert status == 200 and review["total"] >= len(review["items"])
     for item in review["items"][:5]:
         assert item["quote"] and item["context"] and any(line["source"] for line in item["context"])
@@ -65,14 +65,14 @@ def test_feedback_is_checked_then_appended(url, admin):
 
 def test_a_discard_hides_the_capture_and_keeps_its_note(url, admin):
     cookie = login(url)
-    review = json.loads(request(url + "/api/review", cookie)[2])
+    review = json.loads(request(url + "/api/snapshot", cookie)[2])["review"]
     if not review["items"]:
         pytest.skip("nothing waiting for review in this database")
     item = review["items"][0]["id"]
     status, body = post(url + "/api/feedback", cookie, {"kind": "item_discard", "item_id": item, "note": " garbled "})
     try:
         assert status == 201
-        after = json.loads(request(url + "/api/review", cookie)[2])
+        after = json.loads(request(url + "/api/snapshot", cookie)[2])["review"]
         assert item not in [i["id"] for i in after["items"]] and after["total"] == review["total"] - 1
         assert admin.execute("SELECT payload FROM pub.feedback_events WHERE event_id = %s",
                              (body["event_id"],)).fetchone()[0] == {"note": "garbled"}
@@ -92,7 +92,7 @@ def test_correcting_an_idea_shows_at_once_and_keeps_claudes_version(url, admin):
             status, body = post(url + "/api/feedback", cookie, event)
             assert status == 201
             made.append(body["event_id"])
-        shown = json.loads(request(url + f"/api/idea/{idea}", cookie)[2])
+        shown = json.loads(request(url + "/api/snapshot", cookie)[2])["ideas"][str(idea)]
         assert shown["statement"] == "What I actually meant." and shown["title"] == title
         assert shown["claude_statement"] == statement and shown["corrected"] is True
         assert shown["my_note"] == "Said at the bar, as a joke."
@@ -102,7 +102,7 @@ def test_correcting_an_idea_shows_at_once_and_keeps_claudes_version(url, admin):
 
 def test_a_keep_can_carry_a_note(url, admin):
     cookie = login(url)
-    review = json.loads(request(url + "/api/review", cookie)[2])
+    review = json.loads(request(url + "/api/snapshot", cookie)[2])["review"]
     if not review["items"]:
         pytest.skip("nothing waiting for review in this database")
     item = review["items"][0]
@@ -118,8 +118,7 @@ def test_a_keep_can_carry_a_note(url, admin):
 
 def test_status_reports_recent_runs_and_spend(url):
     cookie = login(url)
-    assert request(url + "/api/status")[0] == 401
-    status = json.loads(request(url + "/api/status", cookie)[2])
+    status = json.loads(request(url + "/api/snapshot", cookie)[2])["status"]
     assert {"now", "spent", "runs"} <= set(status) and status["spent"] >= 0
     for run in status["runs"]:
         assert {"started_at", "error", "warnings", "captured", "cost"} <= set(run)

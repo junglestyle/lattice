@@ -39,7 +39,7 @@ def test_the_snapshot_names_the_spot_checks(url):
 
 @needs_db
 def test_bulk_keeps_and_spot_checks_are_flagged(url, admin):
-    review = json.loads(request(url + "/api/review", login(url))[2])
+    review = json.loads(request(url + "/api/snapshot", login(url))[2])["review"]
     rest = [i["id"] for i in review["items"] if i["id"] not in review["audit"]]
     if not rest:
         pytest.skip("no more than the spot checks waiting in this database")
@@ -169,7 +169,7 @@ def test_adding_an_idea(url, admin):
             assert admin.execute("SELECT payload FROM pub.feedback_events WHERE event_id = %s",
                                  (body["event_id"],)).fetchone()[0] == {
                 "title": "Mine", "statement": "An idea I typed.", "note": "From a walk.", "link_to": [str(other)]}
-            shown = json.loads(request(url + f"/api/idea/{new}", login(url))[2])   # at once, not on the run
+            shown = json.loads(request(url + "/api/snapshot", login(url))[2])["ideas"][new]   # at once, not on the run
             assert (shown["title"], shown["origin"], shown["notes"]) == ("Mine", "mine", "From a walk.")
             assert post(url + "/api/feedback", login(url), good)[0] == 201   # a resend changes nothing
         added = tool(url, "add_idea", title="T", statement="S")
