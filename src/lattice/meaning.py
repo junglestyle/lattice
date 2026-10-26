@@ -17,11 +17,10 @@ WINDOW = 250
 
 _lock = threading.Lock()
 _model = None
-MISSING = (psycopg.errors.UndefinedFunction, psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege)
 
 
 class Unavailable(Exception):
-    """Search by meaning can't run: Idea Machine doesn't publish it (yet), or its model differs."""
+    """Search by meaning can't run: Idea Machine's model differs from the one Lattice embeds with."""
 
 
 def _embedder():
@@ -48,10 +47,7 @@ def near(conn, text: str, k: int = 10) -> list[tuple[str, float]]:
     """The k ideas closest in meaning to `text`, closest first, as (idea id, cosine similarity)."""
     if not str(text).strip():
         return []
-    try:
-        model = conn.execute("SELECT pub.embedding_model()").fetchone()[0]
-    except MISSING:
-        raise Unavailable("Idea Machine doesn't publish search by meaning yet") from None
+    model = conn.execute("SELECT pub.embedding_model()").fetchone()[0]
     if model != MODEL_VERSION:
         raise Unavailable(f"Idea Machine now embeds with {model}; Lattice knows {MODEL_VERSION}")
     vec = "[" + ",".join(f"{x:.6f}" for x in embed(text)) + "]"
@@ -64,11 +60,8 @@ def near(conn, text: str, k: int = 10) -> list[tuple[str, float]]:
 
 def neighbours(conn) -> dict:
     """Each idea's closest others, as Idea Machine publishes them: {idea id: [[other id, similarity], ...]}."""
-    try:
-        rows = conn.execute("SELECT idea_id, other_id, similarity FROM pub.idea_neighbours ORDER BY idea_id, rank")
-        out: dict = {}
-        for i, other, sim in rows:
-            out.setdefault(str(i), []).append([str(other), round(float(sim), 3)])
-        return out
-    except MISSING:
-        return {}
+    rows = conn.execute("SELECT idea_id, other_id, similarity FROM pub.idea_neighbours ORDER BY idea_id, rank")
+    out: dict = {}
+    for i, other, sim in rows:
+        out.setdefault(str(i), []).append([str(other), round(float(sim), 3)])
+    return out
