@@ -1,8 +1,9 @@
 # Coding standards
 
-Lattice follows the [org standards](org-standards.md), an unchanged copy of
-[junglestyle's](https://github.com/junglestyle/.github/blob/main/code-standards/README.md). This file adds lattice's
-own rules and examples. Where it differs from an org rule, it says so, and it wins.
+Lattice follows the [org standards](org-standards.md) and the org's [Python standards](org-standards-python.md),
+unchanged copies of [junglestyle's](https://github.com/junglestyle/.github/tree/main/code-standards). `.org-standards`
+lists the topics it copies beyond the general one. This file adds lattice's own rules and examples. Where it differs
+from an org rule, it says so, and it wins.
 
 ## Jungle Style
 
@@ -49,10 +50,11 @@ own rules and examples. Where it differs from an org rule, it says so, and it wi
 
 ## Running it
 
-- `make check` runs everything CI runs except the org standards diff. CI has no Idea Machine database, so there the database tests skip.
-- `make standards` diffs [org-standards.md](org-standards.md) against the org's current file, so a hand edit or a
-  stale copy fails. It needs the network, so it isn't part of `make check`; CI runs it as its own job.
-  `make sync-standards` refreshes the copy.
+- `make check` runs everything CI runs except the org standards check. CI has no Idea Machine database, so there the database tests skip.
+- `make standards` checks [org-standards.md](org-standards.md) and each topic's copy against the org's current
+  files, so a hand edit, a stale copy, or a copy whose topic isn't in `.org-standards` fails. It needs the network,
+  so it isn't part of `make check`; CI runs it as its own job. `make sync-standards` refreshes the copies; to follow
+  another topic, add it to `.org-standards` and run it.
 - Lattice has no installer for the NAS: Idea Machine's installer builds the `Dockerfile`'s image.
   `systemd/install.sh` runs it on a workstation. The [README](../README.md) has the steps for both.
 
@@ -66,3 +68,11 @@ own rules and examples. Where it differs from an org rule, it says so, and it wi
   errors rather than show everything.
 - Evidence quotes are other people's words. Nothing serves them beyond the tailnet except the public MCP listener,
   and [public-mcp.md](public-mcp.md) says what guards it.
+
+## Known deviations
+
+Where Lattice doesn't follow the [Python standards](org-standards-python.md) yet. These are debt to pay down, not
+overrides: each one should go.
+
+- `make check` runs pytest only. Ruff and mypy aren't configured or run.
+- The `Dockerfile` installs uv with `pip`.
