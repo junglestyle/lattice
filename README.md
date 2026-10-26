@@ -133,7 +133,7 @@ Cloudflare Tunnel ([docs/public-mcp.md](docs/public-mcp.md)). The containers log
 
 `systemd/install.sh` runs `lattice serve` as a user service on localhost:8790. It reads `.env`, which holds only
 `LATTICE_DATABASE_URL`, and the service restarts after code changes only when you restart it. The script then puts
-it on the tailnet with `tailscale serve`, at https://eeyore.example.ts.net/ with Tailscale's certificate.
+it on the tailnet with `tailscale serve`, at `https://<host>.ts.net/` with Tailscale's certificate.
 That step needs root once: `sudo tailscale serve --bg http://127.0.0.1:8790`, or `sudo tailscale set
 --operator=$USER` to allow serve changes without root. Never `tailscale funnel`, which would publish it to the
 internet.

@@ -107,7 +107,7 @@ def test_best_ideas_ranks_by_idea_machines_score(url, admin, monkeypatch):
     a, b = [i for (i,) in admin.execute("SELECT idea_id FROM pub.ideas ORDER BY idea_id LIMIT 2")]
     real = data.scores
     monkeypatch.setattr(data, "scores", lambda conn: {})
-    assert tool(url, "best_ideas")["isError"]   # nothing scored yet, as on eeyore today
+    assert tool(url, "best_ideas")["isError"]
     fake = {a: {"score": 0.4, "generality": 2, "novelty": 2, "compression": 3, "outside_value": 2, "recurrence": 0.0,
                 "why": "Narrow."},
             b: {"score": 0.9, "generality": 5, "novelty": 4, "compression": 4, "outside_value": 5, "recurrence": 0.5,
