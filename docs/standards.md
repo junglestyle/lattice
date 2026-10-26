@@ -49,9 +49,10 @@ examples. Where it differs from an org rule, it says so, and it wins.
 
 ## Running it
 
-- `make check` runs everything CI runs. CI has no Idea Machine database, so there the database tests skip.
-- `make check` also diffs [org-standards.md](org-standards.md) against the org's current file, so a hand edit or a
-  stale copy fails. That step needs the network. `make sync-standards` refreshes it.
+- `make check` runs everything CI runs except the org standards diff. CI has no Idea Machine database, so there the database tests skip.
+- `make standards` diffs [org-standards.md](org-standards.md) against the org's current file, so a hand edit or a
+  stale copy fails. It needs the network, so it isn't part of `make check`; CI runs it as its own job.
+  `make sync-standards` refreshes the copy.
 - Lattice has no installer for the NAS: Idea Machine's installer builds the `Dockerfile`'s image.
   `systemd/install.sh` runs it on a workstation. The [README](../README.md) has the steps for both.
 
