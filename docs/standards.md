@@ -1,6 +1,7 @@
 # Coding standards
 
-Lattice follows the [org standards](org-standards.md) and the org's [Python standards](org-standards-python.md),
+Lattice follows the [org standards](org-standards.md) and the org's standards for [Python](org-standards-python.md),
+[SQL](org-standards-sql.md), [containers](org-standards-containers.md) and [shell scripts](org-standards-shell.md),
 unchanged copies of [junglestyle's](https://github.com/junglestyle/.github/tree/main/code-standards). `.org-standards`
 lists the topics it copies beyond the general one. This file adds lattice's own rules and examples. Where it differs
 from an org rule, it says so, and it wins.
@@ -70,3 +71,10 @@ Where Lattice doesn't follow the org standards yet. These are debt to pay down, 
 - The `Dockerfile` installs uv with `pip`.
 - Dependencies: the page's JavaScript and d3 have no decision in Idea Machine's ROADMAP §3.5, where Lattice's decisions
   live.
+- SQL: `keep_rest` records each kept item in its own statement, not in one transaction.
+- SQL: CI has no Postgres, so the database tests skip there.
+- Testing: the tests write to an existing Idea Machine database, not a scratch one, and clean up through an admin URL
+  that isn't checked for localhost.
+- Containers: `python:3.13-slim` doesn't name the Debian release.
+- Containers: the embedding model is downloaded without a pinned revision.
+- Shell: `systemd/install.sh` starts with `#!/bin/bash`, and `make check` doesn't run shellcheck.
