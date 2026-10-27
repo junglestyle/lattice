@@ -78,3 +78,5 @@ Where Lattice doesn't follow the org standards yet. These are debt to pay down, 
 - Containers: `python:3.13-slim` doesn't name the Debian release.
 - Containers: the embedding model is downloaded without a pinned revision.
 - Shell: `systemd/install.sh` starts with `#!/bin/bash`, and `make check` doesn't run shellcheck.
+- Docs: there's no `docs/SPEC.md` or `docs/ROADMAP.md`. Lattice's spec is a section of Idea Machine's ROADMAP (§3.5),
+  with no slices of its own.
