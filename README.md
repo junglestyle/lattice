@@ -84,7 +84,8 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   ask, `star_idea`, `link_ideas`, `note_idea`, `record_comparison`, `decide_item` (your verdict on a spot check) and
   `keep_rest` (the rest, in bulk), `similar_ideas` (like an idea, or like some words), `add_idea` (worded with you, after a check for repeats), `rename_theme` / `merge_themes` / `split_theme` /
   `file_idea` (Claude may suggest a reorganisation; it changes themes only once you agree), `draft_material` (a theme, digest point or set of ideas
-  with notes, quotes, connections and a reading order, for Claude to draft from), `weekly_digest` / `rate_digest_point`, plus `look_again` (kept unread, now mattering; `whats_new` counts them). "Let's
+  with notes, quotes, connections and a reading order, for Claude to draft from), `weekly_digest` / `rate_digest_point`, plus `look_again` (kept unread, now mattering; `whats_new` counts them). `proposals` lists the candidates Idea Machine proposes (M2), and
+  `keep_idea` records your decision on one: keep it as canonical (weighted) or pinned (no weight), unkeep it, or dismiss it. "Let's
   catch up on review" works by voice.
   It takes the Lattice token as a bearer header and is tailnet-only like the rest. `/demo/mcp` is a read-only view
   for showing Lattice to someone, holding back what demo mode does (see docs/public-mcp.md, "The demo connector"). For claude.ai and the phone

@@ -118,3 +118,24 @@ def test_best_ideas_ranks_by_idea_machines_score(url, admin, monkeypatch):
     assert tool(url, "get_idea", idea_id=str(b))["structuredContent"]["ranking"]["novelty"] == 4
     monkeypatch.setattr(data, "scores", real)
     assert isinstance(real(data.connect()), dict)   # the real view reads, scored or not
+
+
+@needs_db
+def test_proposals_and_keeping_are_the_owners_call(url, admin):
+    found = tool(url, "proposals")
+    if found.get("isError"):   # an Idea Machine before M2
+        pytest.skip(found["content"][0]["text"])
+    proposals = found["structuredContent"]["proposals"]
+    weights = [p["weight"] for p in proposals]
+    assert weights == sorted(weights, reverse=True)
+    (idea,) = admin.execute("SELECT idea_id FROM pub.ideas LIMIT 1").fetchone()
+    before = admin.execute("SELECT coalesce(max(event_id), 0) FROM pub.feedback_events").fetchone()[0]
+    try:
+        assert tool(url, "keep_idea", idea_id=str(idea), decision="maybe").get("isError")
+        for decision in ("pinned", "unkeep", "dismiss"):
+            assert not tool(url, "keep_idea", idea_id=str(idea), decision=decision).get("isError")
+        assert admin.execute("SELECT kind, payload, source FROM pub.feedback_events WHERE event_id > %s "
+                             "ORDER BY event_id", (before,)).fetchall() == [
+            ("idea_keep", {"as": "pinned"}, "mcp"), ("idea_unkeep", {}, "mcp"), ("idea_dismiss", {}, "mcp")]
+    finally:
+        admin.execute("DELETE FROM pub.feedback_events WHERE event_id > %s AND source = 'mcp'", (before,))

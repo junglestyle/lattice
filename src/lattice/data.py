@@ -277,13 +277,26 @@ EVENTS = {"item_keep": "item_id", "item_discard": "item_id", "item_star": "item_
           "file_idea": "idea_id", "unfile_idea": "idea_id",
           "idea_sensitive": "idea_id", "theme_sensitive": "theme_id",   # my call for demo mode
           "link": "idea_id", "unlink": "idea_id", "idea_compare": "idea_id", "idea_add": "idea_id",
+          "idea_keep": "idea_id", "idea_unkeep": "idea_id", "idea_dismiss": "idea_id",   # M2: only I make ideas
           "digest_star": None, "digest_dismiss": None,   # a digest point: payload digest_id and point
           "vocab_add": None, "vocab_remove": None}       # a word for transcription: payload term
 WINNERS = ("first", "second", "tie")
+KEEP_AS = ("canonical", "pinned")
 
 
 class NotYet(Exception):
     """Idea Machine's database doesn't take this kind of event yet (its migration isn't deployed): try again later."""
+
+
+def proposals(conn) -> list[dict]:
+    """The candidates Idea Machine proposes I keep as ideas (M2), heaviest first."""
+    try:
+        rows = conn.execute("""SELECT idea_id, title, statement, weight, made_at FROM pub.proposals
+                               ORDER BY weight DESC, made_at, idea_id""").fetchall()
+    except psycopg.errors.UndefinedTable:
+        raise NotYet("Idea Machine doesn't make proposals yet") from None
+    return [{"id": str(i), "title": t, "statement": st, "weight": w, "proposed_at": m.isoformat()}
+            for i, t, st, w, m in rows]
 
 
 def record(conn, event: dict, source: str = "lattice") -> int:
@@ -322,6 +335,10 @@ def record(conn, event: dict, source: str = "lattice") -> int:
         links = sorted({str(UUID(str(x))) for x in links} - {ref})
         if links:
             payload["link_to"] = links
+    elif kind == "idea_keep":   # canonical: weighted in the graph; pinned: kept and visible, no weight
+        if event.get("as") not in KEEP_AS:
+            raise ValueError(f"keep as one of {', '.join(KEEP_AS)}")
+        payload = {"as": event["as"]}
     elif kind in ("idea_sensitive", "theme_sensitive"):
         if not isinstance(event.get("sensitive"), bool):
             raise ValueError("sensitive must be true or false")
