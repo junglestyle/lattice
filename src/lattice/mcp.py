@@ -43,6 +43,10 @@ Themes are the owner's to shape. You may suggest renaming, merging or splitting 
 elsewhere, when you notice a theme is muddled, two overlap, or an idea sits in the wrong one; but change them
 (rename_theme, merge_themes, split_theme, file_idea) only once the owner agrees to the specific change.
 
+Only the owner makes ideas. When they want to see what's emerging, call proposals, read each one to them, and
+record their own decision with keep_idea: canonical (it carries weight), pinned (kept and visible, no weight), or
+dismiss. A star is a pin: it never adds weight.
+
 To draft something from the lattice (an outline, essay, guide, talk), call draft_material for a theme, a digest
 point or a set of ideas, then ask the owner what form, audience and length they want before writing. Write in
 their voice from their ideas; quote them sparingly; say where ideas pull against each other rather than smoothing
@@ -470,6 +474,33 @@ def star_idea(conn, idea_id: str, starred: bool = True) -> dict:
     return {"idea_id": idea_id, "starred": bool(starred)}
 
 
+def proposals(conn) -> dict:
+    try:
+        found = data.proposals(conn)
+    except data.NotYet:
+        raise ToolError("Idea Machine doesn't make proposals yet") from None
+    return {"proposals": found,
+            "ask": "Read each to the owner and ask whether to keep it as canonical (it carries weight in the "
+                   "lattice), keep it as pinned (kept and visible, no weight), or dismiss it; then call keep_idea "
+                   "with their answer. Don't answer for them."}
+
+
+KEEP = {"canonical": "idea_keep", "pinned": "idea_keep", "unkeep": "idea_unkeep", "dismiss": "idea_dismiss"}
+
+
+def keep_idea(conn, idea_id: str, decision: str) -> dict:
+    if decision not in KEEP:
+        raise ToolError(f"decision must be one of {', '.join(KEEP)}")
+    event = {"kind": KEEP[decision], "idea_id": _uuid(idea_id)}
+    if KEEP[decision] == "idea_keep":
+        event["as"] = decision
+    try:
+        data.record(conn, event, source="mcp")
+    except data.NotYet:
+        raise ToolError("Idea Machine doesn't take keep decisions yet; nothing was saved") from None
+    return {"idea_id": idea_id, "decision": decision}
+
+
 def link_ideas(conn, idea_id: str, other_idea_id: str, unlink: bool = False) -> dict:
     a, b = _uuid(idea_id), _uuid(other_idea_id, "other_idea_id")
     if a == b:
@@ -595,6 +626,13 @@ TOOLS = {
                   {"item_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 500,
                                 "description": "rest.items ids from review_digest, minus any the owner wants to judge"}},
                   ["item_ids"]),
+    "proposals": (proposals, True, "Candidates Idea Machine proposes the owner keep as ideas, heaviest first (up to "
+                  "10 a week). Only the owner makes ideas. Use when they want to see what's emerging or review "
+                  "proposals.", {}, []),
+    "keep_idea": (keep_idea, False, "Record the owner's decision on an idea or proposal: keep it as canonical "
+                  "(weighted), keep it as pinned (visible, no weight), unkeep it, or dismiss a proposal. Only the "
+                  "owner's own decision.",
+                  {"idea_id": ID, "decision": {"type": "string", "enum": list(KEEP)}}, ["idea_id", "decision"]),
     "star_idea": (star_idea, False, "Star an idea (or unstar it with starred=false). Only when the owner asks.",
                   {"idea_id": ID, "starred": {"type": "boolean", "default": True}}, ["idea_id"]),
     "link_ideas": (link_ideas, False, "Link two ideas the owner sees as connected (or remove the link with "
