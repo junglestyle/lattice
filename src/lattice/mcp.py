@@ -15,12 +15,13 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import version
 from uuid import UUID
 
 from lattice import data, meaning
 
 PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"]   # newest first; the first is offered when the client's isn't
-SERVER = {"name": "lattice", "title": "Lattice (Idea Machine)", "version": "0.1.0"}
+SERVER = {"name": "lattice", "title": "Lattice (Idea Machine)", "version": version("lattice")}
 INSTRUCTIONS = """Lattice is the owner's Idea Machine: when they mention Idea Machine, their lattice, their ideas or
 what they've been thinking or saying lately, use these tools. It holds the ideas Idea Machine captured from their
 recorded conversations (and seeded from an old ChatGPT archive), grouped into themes, connected to each other,
