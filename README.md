@@ -13,16 +13,9 @@ Its only write is appending to `pub.feedback_events`.
 
 What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
 
-- **Review** with a light touch: five spot checks, picked across Idea Machine's confidence (one per band, by a hash
-  of the id, so every device and the MCP server agree), to judge one by one, and **Keep the rest** in one tap.
-  Those keeps carry `{"bulk": true}` so Idea Machine can weigh them below a verdict I read; anything I untick stays
-  in the queue. Once the queue is empty, **Look again** brings back captures kept unread whose idea has since turned
-  out to matter (I linked it, it evolves another idea or echoes the archive, it bridges themes, it came up in a
-  comparison, or it was said again), for a real verdict; discards are the high-signal one while I keep by default.
-  Or go **one by one**, with keep / ★ / discard and one-tap reasons. When the captures
-  run out, **compare ideas** two at a time ("which is better?", `idea_compare` events): a steadier signal for Idea
-  Machine's ranking than keep and discard. Idea Machine picks the pairs (`pub.compare_pairs`); without them,
-  neighbouring scores or a shared theme. The order shown is random and recorded.
+- **Proposals**: Idea Machine's weekly proposals (M2), heaviest first. Keep each as **Canonical** (it carries
+  weight), **Pin** it (kept and visible, no weight), or **Dismiss** it: `idea_keep` / `idea_dismiss` events. Only you
+  make ideas. Capture review and "which is better?" comparisons are retired: nothing in Idea Machine reads them.
 - **+ Idea**: add your own idea (title, statement, optional context). It's an `idea_add` event with an id made on
   the device, so it shows on the map at once ("Added by you") and can be starred or linked before Idea Machine
   embeds, places and files it on its next run.
@@ -80,13 +73,12 @@ What it does (Idea Machine's ROADMAP, Phase 2 slices 2 and 5):
   from the phone too. Logging out (in the run-status panel) clears the copy and the queue.
 
 - **Talk to it (MCP).** `/mcp` is an MCP server (Streamable HTTP, JSON responses) over `pub`: `search_ideas`,
-  `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, `compare_pair`, `review_digest`, and, when you
-  ask, `star_idea`, `link_ideas`, `note_idea`, `record_comparison`, `decide_item` (your verdict on a spot check) and
-  `keep_rest` (the rest, in bulk), `similar_ideas` (like an idea, or like some words), `add_idea` (worded with you, after a check for repeats), `rename_theme` / `merge_themes` / `split_theme` /
+  `best_ideas`, `get_idea`, `list_themes`, `open_theme`, `whats_new`, and, when you
+  ask, `star_idea`, `link_ideas`, `note_idea`, `similar_ideas` (like an idea, or like some words), `add_idea` (worded with you, after a check for repeats), `rename_theme` / `merge_themes` / `split_theme` /
   `file_idea` (Claude may suggest a reorganisation; it changes themes only once you agree), `draft_material` (a theme, digest point or set of ideas
-  with notes, quotes, connections and a reading order, for Claude to draft from), `weekly_digest` / `rate_digest_point`, plus `look_again` (kept unread, now mattering; `whats_new` counts them). `proposals` lists the candidates Idea Machine proposes (M2), and
-  `keep_idea` records your decision on one: keep it as canonical (weighted) or pinned (no weight), unkeep it, or dismiss it. "Let's
-  catch up on review" works by voice.
+  with notes, quotes, connections and a reading order, for Claude to draft from), `weekly_digest`. `proposals` lists the candidates Idea Machine proposes (M2), and
+  `keep_idea` records your decision on one: keep it as canonical (weighted) or pinned (no weight), unkeep it, or dismiss it. "Show me
+  my proposals" works by voice.
   It takes the Lattice token as a bearer header and is tailnet-only like the rest. `/demo/mcp` is a read-only view
   for showing Lattice to someone, holding back what demo mode does (see docs/public-mcp.md, "The demo connector"). For claude.ai and the phone
   app, which connect from Anthropic's cloud, see [docs/public-mcp.md](docs/public-mcp.md). Speakers are pseudonymized per answer ("me",

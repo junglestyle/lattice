@@ -16,7 +16,7 @@ def test_the_snapshot_holds_everything_the_app_shows(url):
     cookie = login(url)
     assert request(url + "/api/snapshot")[0] == 401
     snap = json.loads(request(url + "/api/snapshot", cookie)[2])
-    assert {"graph", "ideas", "review", "status"} <= set(snap)
+    assert {"graph", "ideas", "proposals", "status"} <= set(snap)
     nodes = snap["graph"]["nodes"]
     assert {n["id"] for n in nodes} == set(snap["ideas"])
     assert all(n["created_at"] for n in nodes)
