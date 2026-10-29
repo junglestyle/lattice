@@ -67,15 +67,51 @@ from an org rule, it says so, and it wins.
 
 Where Lattice doesn't follow the org standards yet. These are debt to pay down, not overrides: each one should go.
 
-- `make check` runs pytest only. Ruff and mypy aren't configured or run.
-- The `Dockerfile` installs uv with `pip`.
 - Dependencies: the page's JavaScript and d3 have no decision in Idea Machine's ROADMAP §3.5, where Lattice's decisions
   live.
-- SQL: CI has no Postgres, so the database tests skip there.
-- Testing: the tests write to an existing Idea Machine database, not a scratch one, and clean up through an admin URL
-  that isn't checked for localhost.
-- Containers: `python:3.13-slim` doesn't name the Debian release.
-- Containers: the embedding model is downloaded without a pinned revision.
-- Shell: `systemd/install.sh` starts with `#!/bin/bash`, and `make check` doesn't run shellcheck.
+- Versions and pins: the NAS runs whatever `git pull` brings (README, "On the NAS"). Nothing pins the commit it
+  deploys.
+- Versions and pins: `src/lattice/meaning.py` imports numpy, which `pyproject.toml` doesn't declare (fastembed brings
+  it). The build backend, `hatchling`, has no lower bound and isn't in `uv.lock`.
+- Versions and pins: `pyproject.toml` has no `[tool.uv] required-version`, so CI's `setup-uv` (`check.yml`) installs
+  the newest uv while the `Dockerfile` pins 0.12.2.
+- Versions and pins, Containers: the embedding model is downloaded without a revision or a checksum, by the
+  `Dockerfile` (line 11) and, outside the image, by `meaning.py` on first use.
+- Versions and pins: the page loads d3 7.9.0 from cdnjs (`index.html:12`, `static/sw.js:5`) with no `integrity`
+  checksum.
+- Versions and pins: the only tag, `v1`, is annotated but isn't `vX.Y.Z`, so it isn't a release.
+- Versions and pins: `pyproject.toml` says `0.0.0`, and CI runs only on main and pull requests, so nothing yet fails a
+  `vX.Y.Z` tag that doesn't match it.
+- Config: `mcp.handle`'s `connect` parameter is set only by `tests/test_audit.py:234`, to its default.
+- Privacy: the personal layout this file's Privacy rule forbids is committed: `~/data/code/ideamachine` (README lines
+  10 and 95) and `%h/data/code/lattice` (`systemd/lattice.service`).
+- Secrets: [public-mcp.md](public-mcp.md) (step 2) has the operator `echo` the tunnel's token into
+  `config/cloudflared.env` and `chmod 600` it afterwards, so the file starts out with the umask's mode and the token
+  lands in shell history.
 - Docs: there's no `docs/SPEC.md` or `docs/ROADMAP.md`. Lattice's spec is a section of Idea Machine's ROADMAP (§3.5),
-  with no slices of its own.
+  and its slices are Idea Machine's Phase 2 slices, with none of its own.
+- Deployment repos: the README and [public-mcp.md](public-mcp.md) carry the NAS deployment: its `/mnt/fast/...`
+  paths, the tailnet port 8444 and the deploy steps. The Privacy override above predates the Deployment repos rule,
+  and Idea Machine's standards list the same facts as belonging in a future `ideamachine-deployment` repo.
+- Containers: `python:3.13-slim` doesn't name the Debian release.
+- Containers: the `Dockerfile` installs uv with `pip`.
+- Python: `make check` runs pytest only. Ruff and mypy aren't configured or run.
+- Python: `scripts/make_icons.py` is a command outside `[project.scripts]`, with no `main()`.
+- Python: many functions leave parameters unannotated, among them every `conn` in `data.py` and `mcp.py`,
+  `mcp.handle`'s `message` and `server.main`'s `argv`.
+- Python: records travel as plain `dict`s (`data.graph`, `data.idea`, `data.review`, every MCP tool's result), not
+  frozen dataclasses.
+- Python: the exceptions callers catch by type aren't named `<Thing>Error`: `data.NotYet`, `meaning.Unavailable`,
+  `mcp.UnknownTool` and `oauth.Redirect`.
+- Python: the public MCP listener's thread (`server.py:341`) is a daemon with no stop `Event`, never joined.
+- Python: the tests write to an existing Idea Machine database, not a scratch one, and clean up through an admin URL
+  that isn't checked for localhost.
+- Python: `make check` runs `pytest` without `-rs`, and nothing configures it, so the skips don't show.
+- Python: `tests/test_server.py` and `tests/test_mcp.py` are named for modules, not behaviors.
+- Shell: `systemd/install.sh` starts with `#!/bin/bash`, and `make check` doesn't run shellcheck.
+- SQL: `mcp._theme` (`mcp.py:152-154`) takes `LIMIT 1` of the themes whose name matches, and its `ORDER BY` doesn't
+  decide between two with the same name. Idea Machine's `im.themes.name` has no unique constraint.
+- SQL: `data.WINNERS`, `data.KEEP_AS` and `data.VOCAB_SOURCES` copy the lists in Idea Machine's
+  `feedback_events_compare`, `feedback_events_idea_keep` and `feedback_events_vocab` checks, rather than rely on them.
+  `data.record` already turns any check but the kind's into a `ValueError` (`data.py:260`).
+- SQL: CI has no Postgres, so the database tests skip there.
