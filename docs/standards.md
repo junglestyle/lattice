@@ -71,7 +71,6 @@ Where Lattice doesn't follow the org standards yet. These are debt to pay down, 
 - The `Dockerfile` installs uv with `pip`.
 - Dependencies: the page's JavaScript and d3 have no decision in Idea Machine's ROADMAP §3.5, where Lattice's decisions
   live.
-- SQL: `keep_rest` records each kept item in its own statement, not in one transaction.
 - SQL: CI has no Postgres, so the database tests skip there.
 - Testing: the tests write to an existing Idea Machine database, not a scratch one, and clean up through an admin URL
   that isn't checked for localhost.
